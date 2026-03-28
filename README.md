@@ -20,7 +20,7 @@ A collaborative pixel art canvas inspired by Reddit's r/place. Users join a shar
 
 ## How to Run Locally
 1. Clone the repository:
-   git clone <your-repo-url>
+   git clone [<your-repo-url>](https://github.com/sala1908/web-app-social-experiment.git)
 
 2. Navigate to the source code folder:
    cd ProjectSourceCode
