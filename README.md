@@ -42,3 +42,10 @@ A collaborative pixel art canvas inspired by Reddit's r/place. Users join a shar
 
 ## Deployed Application
 Link coming soon
+
+# Project-014-3
+Repository for team 014-3's Software Development Methods and Tools Project
+# Authors:
+Samuel Lauer, Denys ..., Mac, Sami
+# Summary: 
+This application is intended to provide a social experiment experience to the users. With inspiration from projects like r/place, we aim to create an interactive enviornment where users can compare their scores with others, and compete. 
