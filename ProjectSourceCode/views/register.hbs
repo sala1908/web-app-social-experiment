@@ -1,0 +1,16 @@
+<main class="auth-page">
+  <h1>Register</h1>
+  {{#if error}}<p class="error">{{error}}</p>{{/if}}
+  <form method="POST" action="/auth/register" class="auth-form">
+    <label>
+      Email
+      <input type="email" name="email" required />
+    </label>
+    <label>
+      Password
+      <input type="password" name="password" minlength="8" required />
+    </label>
+    <button type="submit">Create account</button>
+  </form>
+  <a href="/login">Already have an account?</a>
+</main>
