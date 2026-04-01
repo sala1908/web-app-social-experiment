@@ -6,6 +6,7 @@
 
   const toolbar = document.getElementById("toolbar");
   const statusEl = document.getElementById("status");
+  const pixelCountEl = document.getElementById("pixel-count");
   const usageEl = document.getElementById("usage");
   const paletteEl = document.getElementById("palette");
   const brushInput = document.getElementById("brush-size");
@@ -49,16 +50,21 @@
 
   function updateUsage() {
     if (isAdmin) {
+      pixelCountEl.textContent = "Pixels left: unlimited";
       usageEl.textContent = "Admin mode: unlimited paints.";
       return;
     }
 
     if (!authenticated) {
+      pixelCountEl.textContent = typeof state.remainingPaints === "number"
+        ? `Pixels left today: ${state.remainingPaints}`
+        : "Pixels left today: ...";
       usageEl.textContent = "Guest mode: painting enabled.";
       return;
     }
 
     if (typeof state.remainingPaints === "number") {
+      pixelCountEl.textContent = `Pixels left today: ${state.remainingPaints}`;
       usageEl.textContent = `Paints remaining today: ${state.remainingPaints}`;
     }
   }
@@ -383,6 +389,8 @@
         setStatus("Daily limits reset.");
       });
     }
+
+    updateUsage();
   }
 
   async function init() {
@@ -392,8 +400,9 @@
 
     if (authenticated) {
       await loadPalette();
-      await loadLimits();
     }
+
+    await loadLimits();
 
     connectSocket();
     updateUsage();

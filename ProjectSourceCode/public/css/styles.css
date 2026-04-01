@@ -157,6 +157,10 @@ body {
   color: #5e4d2e;
 }
 
+#pixel-count {
+  font-weight: 700;
+}
+
 .auth-page {
   max-width: 420px;
   margin: 36px auto;

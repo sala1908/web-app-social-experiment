@@ -1,7 +1,7 @@
 const express = require("express");
 const { pool } = require("../db/pool");
 const { requireAuth, requireAdmin } = require("../middleware/auth");
-const { GRID_SIZE, MAX_BRUSH_SIZE, DAILY_MAX_PAINTS } = require("../config/constants");
+const { GRID_SIZE, MAX_BRUSH_SIZE, DAILY_MAX_PAINTS, GUEST_MAX_PAINTS } = require("../config/constants");
 
 const router = express.Router();
 
@@ -34,6 +34,14 @@ async function getRemainingPaints(client, userId) {
   );
 
   return Math.max(0, DAILY_MAX_PAINTS - rows[0].paints_today);
+}
+
+function getGuestRemainingPaints(session) {
+  if (typeof session.guestPaintsRemaining !== "number") {
+    session.guestPaintsRemaining = GUEST_MAX_PAINTS;
+  }
+
+  return Math.max(0, session.guestPaintsRemaining);
 }
 
 function buildBrushCells(x, y, brushSize) {
@@ -70,9 +78,14 @@ router.get("/me", (req, res) => {
   });
 });
 
-router.get("/me/limits", requireAuth, async (req, res, next) => {
+router.get("/me/limits", async (req, res, next) => {
   if (req.session && req.session.isAdmin) {
     return res.json({ dailyMaxPaints: null, remainingPaints: null, unlimited: true });
+  }
+
+  if (!req.session || !req.session.userId) {
+    const remainingPaints = getGuestRemainingPaints(req.session);
+    return res.json({ dailyMaxPaints: GUEST_MAX_PAINTS, remainingPaints, guest: true });
   }
 
   const client = await pool.connect();
@@ -177,6 +190,7 @@ router.post("/paint", async (req, res, next) => {
   }
 
   const userId = req.session && req.session.userId ? req.session.userId : null;
+  const isGuest = !userId && !(req.session && req.session.isAdmin);
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
@@ -187,6 +201,12 @@ router.post("/paint", async (req, res, next) => {
       if (remaining <= 0) {
         await client.query("ROLLBACK");
         return res.status(429).json({ error: "Daily paint limit reached.", dailyMaxPaints: DAILY_MAX_PAINTS, remainingPaints: 0 });
+      }
+    } else if (isGuest) {
+      remaining = getGuestRemainingPaints(req.session);
+      if (remaining <= 0) {
+        await client.query("ROLLBACK");
+        return res.status(429).json({ error: "Guest paint limit reached.", dailyMaxPaints: GUEST_MAX_PAINTS, remainingPaints: 0 });
       }
     }
 
@@ -200,6 +220,8 @@ router.post("/paint", async (req, res, next) => {
 
     if (userId) {
       await client.query("INSERT INTO paint_actions (user_id) VALUES ($1)", [userId]);
+    } else if (isGuest) {
+      req.session.guestPaintsRemaining = Math.max(0, remaining - 1);
     }
 
     const cells = buildBrushCells(x, y, brushSize);
