@@ -1,10 +1,13 @@
 <main class="auth-page">
   <h1>Login</h1>
+  <div class="auth-links">
+    <a href="/" class="home-button">Home</a>
+  </div>
   {{#if error}}<p class="error">{{error}}</p>{{/if}}
   <form method="POST" action="/auth/login" class="auth-form">
     <label>
-      Email
-      <input type="email" name="email" required />
+      Email or Username
+      <input type="text" name="email" required />
     </label>
     <label>
       Password

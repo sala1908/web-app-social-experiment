@@ -40,6 +40,11 @@ body {
   letter-spacing: 0.04em;
 }
 
+.home-link {
+  color: inherit;
+  text-decoration: none;
+}
+
 .auth-block {
   display: flex;
   align-items: center;
@@ -47,7 +52,8 @@ body {
 }
 
 .auth-block a,
-.auth-block button {
+.auth-block button,
+.home-button {
   border: 1px solid var(--line);
   border-radius: 8px;
   background: #ffffff;
@@ -55,6 +61,15 @@ body {
   padding: 6px 10px;
   text-decoration: none;
   cursor: pointer;
+}
+
+.home-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  background: linear-gradient(180deg, #fffdf7 0%, #f5ead3 100%);
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.04);
 }
 
 .toolbar {
@@ -73,6 +88,20 @@ body {
   border: 1px solid var(--line);
   border-radius: 8px;
   background: white;
+  padding: 7px 12px;
+  cursor: pointer;
+}
+
+.admin-controls {
+  display: flex;
+  gap: 8px;
+}
+
+.admin-controls button {
+  border: 1px solid #b42318;
+  border-radius: 8px;
+  background: #fff1ef;
+  color: #7a271a;
   padding: 7px 12px;
   cursor: pointer;
 }
@@ -141,6 +170,16 @@ body {
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+
+.auth-links {
+  margin: 12px 0 16px;
+}
+
+.auth-links a {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .auth-form input,

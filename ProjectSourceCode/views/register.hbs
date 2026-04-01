@@ -1,5 +1,8 @@
 <main class="auth-page">
   <h1>Register</h1>
+  <div class="auth-links">
+    <a href="/" class="home-button">Home</a>
+  </div>
   {{#if error}}<p class="error">{{error}}</p>{{/if}}
   <form method="POST" action="/auth/register" class="auth-form">
     <label>

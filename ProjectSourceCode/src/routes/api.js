@@ -1,6 +1,6 @@
 const express = require("express");
 const { pool } = require("../db/pool");
-const { requireAuth } = require("../middleware/auth");
+const { requireAuth, requireAdmin } = require("../middleware/auth");
 const { GRID_SIZE, MAX_BRUSH_SIZE, DAILY_MAX_PAINTS } = require("../config/constants");
 
 const router = express.Router();
@@ -71,6 +71,10 @@ router.get("/me", (req, res) => {
 });
 
 router.get("/me/limits", requireAuth, async (req, res, next) => {
+  if (req.session && req.session.isAdmin) {
+    return res.json({ dailyMaxPaints: null, remainingPaints: null, unlimited: true });
+  }
+
   const client = await pool.connect();
   try {
     const remaining = await getRemainingPaints(client, req.session.userId);
@@ -83,6 +87,20 @@ router.get("/me/limits", requireAuth, async (req, res, next) => {
 });
 
 router.get("/palette", requireAuth, async (req, res, next) => {
+  if (req.session && req.session.isAdmin) {
+    try {
+      const { rows } = await pool.query(
+        `
+          SELECT color_hex, 'default' AS scope FROM default_palette
+          ORDER BY color_hex ASC
+        `
+      );
+      return res.json({ palette: rows });
+    } catch (error) {
+      return next(error);
+    }
+  }
+
   try {
     const { rows } = await pool.query(
       `
@@ -101,6 +119,10 @@ router.get("/palette", requireAuth, async (req, res, next) => {
 });
 
 router.post("/palette", requireAuth, async (req, res, next) => {
+  if (req.session && req.session.isAdmin) {
+    return res.status(403).json({ error: "Admin palette cannot be modified." });
+  }
+
   const color = String(req.body.color || "").toUpperCase();
   if (!isHexColor(color)) {
     return res.status(400).json({ error: "Color must be a valid hex value like #A1B2C3." });
@@ -118,6 +140,10 @@ router.post("/palette", requireAuth, async (req, res, next) => {
 });
 
 router.delete("/palette/:color", requireAuth, async (req, res, next) => {
+  if (req.session && req.session.isAdmin) {
+    return res.status(403).json({ error: "Admin palette cannot be modified." });
+  }
+
   const color = String(req.params.color || "").toUpperCase();
   if (!isHexColor(color)) {
     return res.status(400).json({ error: "Invalid color." });
@@ -131,7 +157,7 @@ router.delete("/palette/:color", requireAuth, async (req, res, next) => {
   }
 });
 
-router.post("/paint", requireAuth, async (req, res, next) => {
+router.post("/paint", async (req, res, next) => {
   const x = Number(req.body.x);
   const y = Number(req.body.y);
   const brushSize = Number(req.body.brushSize || 1);
@@ -150,25 +176,31 @@ router.post("/paint", requireAuth, async (req, res, next) => {
     return res.status(400).json({ error: "Paint mode requires a valid hex color." });
   }
 
+  const userId = req.session && req.session.userId ? req.session.userId : null;
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
 
-    const remaining = await getRemainingPaints(client, req.session.userId);
-    if (remaining <= 0) {
-      await client.query("ROLLBACK");
-      return res.status(429).json({ error: "Daily paint limit reached.", dailyMaxPaints: DAILY_MAX_PAINTS, remainingPaints: 0 });
+    let remaining = null;
+    if (userId) {
+      remaining = await getRemainingPaints(client, userId);
+      if (remaining <= 0) {
+        await client.query("ROLLBACK");
+        return res.status(429).json({ error: "Daily paint limit reached.", dailyMaxPaints: DAILY_MAX_PAINTS, remainingPaints: 0 });
+      }
     }
 
-    const allowedColors = await getAllowedColors(client, req.session.userId);
+    const allowedColors = userId ? await getAllowedColors(client, userId) : null;
     const color = rawColor.toUpperCase();
 
-    if (mode === "paint" && !allowedColors.has(color)) {
+    if (mode === "paint" && allowedColors && !allowedColors.has(color)) {
       await client.query("ROLLBACK");
       return res.status(403).json({ error: "Color is not in your allowed palette." });
     }
 
-    await client.query("INSERT INTO paint_actions (user_id) VALUES ($1)", [req.session.userId]);
+    if (userId) {
+      await client.query("INSERT INTO paint_actions (user_id) VALUES ($1)", [userId]);
+    }
 
     const cells = buildBrushCells(x, y, brushSize);
     const modifiedPixels = [];
@@ -176,10 +208,12 @@ router.post("/paint", requireAuth, async (req, res, next) => {
     for (const cell of cells) {
       if (mode === "erase") {
         await client.query("DELETE FROM canvas_pixels WHERE x = $1 AND y = $2", [cell.x, cell.y]);
-        await client.query(
-          "INSERT INTO pixel_history (user_id, x, y, color_hex, action, brush_size) VALUES ($1, $2, $3, NULL, 'erase', $4)",
-          [req.session.userId, cell.x, cell.y, brushSize]
-        );
+        if (userId) {
+          await client.query(
+            "INSERT INTO pixel_history (user_id, x, y, color_hex, action, brush_size) VALUES ($1, $2, $3, NULL, 'erase', $4)",
+            [userId, cell.x, cell.y, brushSize]
+          );
+        }
         modifiedPixels.push({ x: cell.x, y: cell.y, color_hex: null });
       } else {
         await client.query(
@@ -189,25 +223,27 @@ router.post("/paint", requireAuth, async (req, res, next) => {
             ON CONFLICT (x, y)
             DO UPDATE SET color_hex = EXCLUDED.color_hex, updated_by = EXCLUDED.updated_by, updated_at = NOW()
           `,
-          [cell.x, cell.y, color, req.session.userId]
+          [cell.x, cell.y, color, userId]
         );
-        await client.query(
-          "INSERT INTO pixel_history (user_id, x, y, color_hex, action, brush_size) VALUES ($1, $2, $3, $4, 'paint', $5)",
-          [req.session.userId, cell.x, cell.y, color, brushSize]
-        );
+        if (userId) {
+          await client.query(
+            "INSERT INTO pixel_history (user_id, x, y, color_hex, action, brush_size) VALUES ($1, $2, $3, $4, 'paint', $5)",
+            [userId, cell.x, cell.y, color, brushSize]
+          );
+        }
         modifiedPixels.push({ x: cell.x, y: cell.y, color_hex: color });
       }
     }
 
     await client.query("COMMIT");
 
-    const nextRemaining = Math.max(0, remaining - 1);
+    const nextRemaining = typeof remaining === "number" ? Math.max(0, remaining - 1) : null;
     const io = req.app.get("io");
     if (io) {
       io.emit("paint_applied", {
         mode,
         brushSize,
-        userId: req.session.userId,
+        userId,
         modifiedPixels
       });
     }
@@ -222,6 +258,38 @@ router.post("/paint", requireAuth, async (req, res, next) => {
     return next(error);
   } finally {
     client.release();
+  }
+});
+
+router.post("/admin/reset-canvas", requireAdmin, async (req, res, next) => {
+  try {
+    await pool.query("DELETE FROM canvas_pixels");
+
+    const io = req.app.get("io");
+    if (io) {
+      io.emit("canvas_reset", {
+        resetBy: req.session.adminUsername || "admin"
+      });
+    }
+
+    return res.json({ ok: true });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+router.post("/admin/reset-daily-limit", requireAdmin, async (req, res, next) => {
+  try {
+    const { rowCount } = await pool.query(
+      `
+        DELETE FROM paint_actions
+        WHERE created_at >= (date_trunc('day', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC')
+      `
+    );
+
+    return res.json({ ok: true, clearedActions: rowCount });
+  } catch (error) {
+    return next(error);
   }
 });
 

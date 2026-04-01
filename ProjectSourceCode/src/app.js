@@ -63,13 +63,23 @@ function createApp() {
     };
 
     res.locals.currentUser = null;
+    if (req.session.isAdmin) {
+      req.user = {
+        id: null,
+        email: req.session.adminUsername || "admin",
+        isAdmin: true
+      };
+      res.locals.currentUser = req.user;
+      return next();
+    }
+
     if (!req.session.userId) {
       return next();
     }
 
     try {
       const { rows } = await pool.query("SELECT id, email FROM users WHERE id = $1", [req.session.userId]);
-      req.user = rows[0] || null;
+      req.user = rows[0] ? { ...rows[0], isAdmin: false } : null;
       res.locals.currentUser = req.user;
       return next();
     } catch (error) {

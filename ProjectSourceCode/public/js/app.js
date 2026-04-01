@@ -12,9 +12,12 @@
   const brushLabel = document.getElementById("brush-size-label");
   const activeColorInput = document.getElementById("active-color");
   const addColorBtn = document.getElementById("add-color");
+  const adminResetCanvasBtn = document.getElementById("admin-reset-canvas");
+  const adminResetLimitsBtn = document.getElementById("admin-reset-limits");
 
   const cfg = window.APP_CONFIG || { gridSize: 1024, maxBrushSize: 5 };
   const authenticated = Boolean(window.APP_AUTHENTICATED);
+  const isAdmin = Boolean(window.APP_IS_ADMIN);
   const ctx = canvas.getContext("2d");
   const pixels = new Map();
 
@@ -45,8 +48,13 @@
   }
 
   function updateUsage() {
+    if (isAdmin) {
+      usageEl.textContent = "Admin mode: unlimited paints.";
+      return;
+    }
+
     if (!authenticated) {
-      usageEl.textContent = "Login required to paint.";
+      usageEl.textContent = "Guest mode: painting enabled.";
       return;
     }
 
@@ -193,10 +201,6 @@
   }
 
   async function enqueuePaint(x, y) {
-    if (!authenticated) {
-      return;
-    }
-
     const dedupeKey = `${x}:${y}:${state.mode}:${state.brushSize}:${state.activeColor}`;
     if (state.lastPaintKey === dedupeKey) {
       return;
@@ -238,6 +242,12 @@
       }
       applyModifiedPixels(event.modifiedPixels);
     });
+
+    socket.on("canvas_reset", () => {
+      pixels.clear();
+      draw();
+      setStatus("Canvas was reset by admin.");
+    });
   }
 
   function bindEvents() {
@@ -270,11 +280,6 @@
       }
 
       if (event.button !== 0) {
-        return;
-      }
-
-      if (!authenticated) {
-        setStatus("Login required to paint.", true);
         return;
       }
 
@@ -342,6 +347,42 @@
       await loadPalette();
       setStatus("Color added to your palette.");
     });
+
+    if (adminResetCanvasBtn) {
+      adminResetCanvasBtn.addEventListener("click", async () => {
+        const response = await fetch("/api/admin/reset-canvas", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" }
+        });
+
+        if (!response.ok) {
+          const payload = await response.json();
+          setStatus(payload.error || "Unable to reset canvas.", true);
+          return;
+        }
+
+        pixels.clear();
+        draw();
+        setStatus("Canvas reset complete.");
+      });
+    }
+
+    if (adminResetLimitsBtn) {
+      adminResetLimitsBtn.addEventListener("click", async () => {
+        const response = await fetch("/api/admin/reset-daily-limit", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" }
+        });
+
+        if (!response.ok) {
+          const payload = await response.json();
+          setStatus(payload.error || "Unable to reset daily limit.", true);
+          return;
+        }
+
+        setStatus("Daily limits reset.");
+      });
+    }
   }
 
   async function init() {

@@ -6,6 +6,7 @@ router.get("/", (req, res) => {
   res.render("home", {
     title: "Web-E-Vil",
     isAuthenticated: Boolean(req.user),
+    isAdmin: Boolean(req.session && req.session.isAdmin),
     user: req.user || null
   });
 });
