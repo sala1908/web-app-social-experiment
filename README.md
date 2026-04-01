@@ -2,6 +2,18 @@
 
 A collaborative pixel art canvas inspired by Reddit's r/place. Users join a shared digital canvas and place colored pixels to contribute to a collective piece of art.
 
+## Current MVP Features
+- Shared 1024x1024 pixel canvas
+- Real-time updates across connected clients
+- Pan and zoom controls on the canvas
+- Paint and erase tools
+- Brush sizes from 1 to 5
+- Email/password authentication
+- Login-required painting and erasing
+- Per-user custom color palettes (plus default shared colors)
+- Daily paint limit of 50 actions per user
+- Full pixel edit history persisted in PostgreSQL
+
 ## Contributors
 - Sami Yohannes (sayo4369)
 - Samuel Lauer (sala1908)
@@ -20,15 +32,19 @@ A collaborative pixel art canvas inspired by Reddit's r/place. Users join a shar
 
 ## How to Run Locally
 1. Clone the repository:
-   git clone [<your-repo-url>](https://github.com/sala1908/web-app-social-experiment.git)
+   git clone https://github.com/sala1908/web-app-social-experiment.git
 
 2. Navigate to the source code folder:
-   cd ProjectSourceCode
+   cd web-app-social-experiment/ProjectSourceCode
 
-3. Create a .env file with your database credentials
+3. Ensure the root `.env` file exists at `web-app-social-experiment/.env` with:
+   POSTGRES_USER=postgres
+   POSTGRES_PASSWORD=pwd
+   POSTGRES_DB=users_db
+   SESSION_SECRET=super-duper-secret
 
 4. Start the application:
-   docker-compose up
+   docker compose -f docker_compose.yaml up --build
 
 5. Open your browser and go to:
    http://localhost:3000
@@ -37,8 +53,15 @@ A collaborative pixel art canvas inspired by Reddit's r/place. Users join a shar
 1. Navigate to the ProjectSourceCode folder:
    cd ProjectSourceCode
 
-2. Run the test suite:
-   npm test
+2. Run the app stack for manual verification:
+   docker compose -f docker_compose.yaml up --build
+
+3. Manual smoke checks:
+   - Register two users in two browser sessions
+   - Verify both sessions see real-time pixel updates
+   - Verify painting is rejected when not logged in
+   - Verify per-user palette additions work
+   - Verify the 51st paint in one day is rejected
 
 ## Deployed Application
 Link coming soon
