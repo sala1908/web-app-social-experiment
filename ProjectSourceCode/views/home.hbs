@@ -1,0 +1,60 @@
+<main class="page">
+  <header class="topbar">
+    <h1><a class="home-link" href="/">Web-E-Vil</a></h1>
+    <div class="auth-block">
+      <a href="/" class="home-button">Home</a>
+      {{#if isAuthenticated}}
+        <span class="user-email">{{user.email}}</span>
+        <form method="POST" action="/auth/logout">
+          <button type="submit">Logout</button>
+        </form>
+      {{else}}
+        <a href="/login">Login</a>
+        <a href="/register">Register</a>
+        <a href="/profile">Profile</a>
+      {{/if}}
+    </div>
+  </header>
+
+  <section class="toolbar" id="toolbar" data-authenticated="{{isAuthenticated}}">
+    <button type="button" data-mode="paint" class="tool-button active">Paint</button>
+    <button type="button" data-mode="erase" class="tool-button">Erase</button>
+
+    <label>
+      Brush
+      <input id="brush-size" type="range" min="1" max="{{appConfig.maxBrushSize}}" value="1" />
+      <span id="brush-size-label">1</span>
+    </label>
+
+    <label>
+      Active Color
+      <input id="active-color" type="color" value="#000000" />
+    </label>
+
+    <button type="button" id="add-color">Add Color</button>
+
+    {{#if isAdmin}}
+      <div class="admin-controls">
+        <button type="button" id="admin-reset-canvas">Reset Canvas</button>
+        <button type="button" id="admin-reset-limits">Reset Daily Limit</button>
+      </div>
+    {{/if}}
+
+    <div id="palette" class="palette"></div>
+
+    <div id="usage" class="usage"></div>
+  </section>
+
+  <section class="canvas-shell">
+    <canvas id="pixel-canvas"></canvas>
+  </section>
+
+  <p id="status" class="status"></p>
+</main>
+
+<script>
+  window.APP_CONFIG = {{json appConfig}};
+  window.APP_USER = {{json user}};
+  window.APP_AUTHENTICATED = {{#if isAuthenticated}}true{{else}}false{{/if}};
+  window.APP_IS_ADMIN = {{#if isAdmin}}true{{else}}false{{/if}};
+</script>

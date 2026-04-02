@@ -1,0 +1,39 @@
+<header class="topbar">
+    <h1><a class="home-link" href="/">Web-E-Vil</a></h1>
+    <div class="auth-block">
+      <a href="/" class="home-button">Home</a>
+      {{#if isAuthenticated}}
+        <span class="user-email">{{user.email}}</span>
+        <form method="POST" action="/auth/logout">
+          <button type="submit">Logout</button>
+        </form>
+      {{else}}
+        <a href="/login">Login</a>
+        <a href="/register">Register</a>
+        <a href="/profile">Profile</a>
+      {{/if}}
+    </div>
+  </header>
+
+<main class="auth-page">
+
+
+
+  <h1>Login</h1>
+  {{!-- <div class="auth-links">
+    <a href="/" class="home-button">Home</a>
+  </div> --}}
+  {{#if error}}<p class="error">{{error}}</p>{{/if}}
+  <form method="POST" action="/auth/login" class="auth-form">
+    <label>
+      Email or Username
+      <input type="text" name="email" required />
+    </label>
+    <label>
+      Password
+      <input type="password" name="password" required />
+    </label>
+    <button type="submit">Login</button>
+  </form>
+  <a href="/register">Need an account?</a>
+</main>

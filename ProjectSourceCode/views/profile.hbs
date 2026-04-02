@@ -1,0 +1,21 @@
+<main class="page">
+  <header class="topbar">
+    <h1><a class="home-link" href="/">Web-E-Vil</a></h1>
+    <div class="auth-block">
+      <a href="/" class="home-button">Home</a>
+      {{#if isAuthenticated}}
+        <span class="user-email">{{user.email}}</span>
+        <form method="POST" action="/auth/logout">
+          <button type="submit">Logout</button>
+        </form>
+      {{else}}
+        <a href="/login">Login</a>
+        <a href="/register">Register</a>
+        <a href="/profile">Profile</a>
+      {{/if}}
+    </div>
+  </header>
+
+  <h1>Profile</h1>
+  
+  </main>
