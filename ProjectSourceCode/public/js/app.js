@@ -11,8 +11,6 @@
   const paletteEl = document.getElementById("palette");
   const brushInput = document.getElementById("brush-size");
   const brushLabel = document.getElementById("brush-size-label");
-  const activeColorInput = document.getElementById("active-color");
-  const addColorBtn = document.getElementById("add-color");
   const adminResetCanvasBtn = document.getElementById("admin-reset-canvas");
   const adminResetLimitsBtn = document.getElementById("admin-reset-limits");
 
@@ -73,20 +71,97 @@
     return `${x},${y}`;
   }
 
-  function setPixel(x, y, color) {
+  function setPixel(x, y, color, ownerId, ownerTag) {
     const key = keyFor(x, y);
     if (!color) {
       pixels.delete(key);
     } else {
-      pixels.set(key, color);
+      pixels.set(key, {
+        color,
+        ownerId,
+        ownerTag
+      });
     }
   }
 
   function applyModifiedPixels(modifiedPixels) {
     modifiedPixels.forEach((pixel) => {
-      setPixel(pixel.x, pixel.y, pixel.color_hex);
+      setPixel(pixel.x, pixel.y, pixel.color_hex, pixel.owner_id, pixel.owner_tag);
     });
     draw();
+  }
+
+  function computeTaggedGroups() {
+    const byOwner = new Map();
+
+    for (const [xy, pixel] of pixels.entries()) {
+      if (!pixel || !pixel.ownerId || !pixel.ownerTag) {
+        continue;
+      }
+
+      const ownerKey = String(pixel.ownerId);
+      if (!byOwner.has(ownerKey)) {
+        byOwner.set(ownerKey, {
+          tag: pixel.ownerTag,
+          cells: new Set()
+        });
+      }
+
+      byOwner.get(ownerKey).cells.add(xy);
+    }
+
+    const groups = [];
+    const neighbors = [
+      [1, 0],
+      [-1, 0],
+      [0, 1],
+      [0, -1]
+    ];
+
+    for (const ownerData of byOwner.values()) {
+      const seen = new Set();
+
+      for (const start of ownerData.cells) {
+        if (seen.has(start)) {
+          continue;
+        }
+
+        let size = 0;
+        let minX = Infinity;
+        let minY = Infinity;
+        const stack = [start];
+
+        while (stack.length > 0) {
+          const current = stack.pop();
+          if (seen.has(current) || !ownerData.cells.has(current)) {
+            continue;
+          }
+
+          seen.add(current);
+          const [x, y] = current.split(",").map(Number);
+          size += 1;
+          minX = Math.min(minX, x);
+          minY = Math.min(minY, y);
+
+          for (const [dx, dy] of neighbors) {
+            const nextKey = keyFor(x + dx, y + dy);
+            if (!seen.has(nextKey) && ownerData.cells.has(nextKey)) {
+              stack.push(nextKey);
+            }
+          }
+        }
+
+        if (size >= 3) {
+          groups.push({
+            tag: ownerData.tag,
+            x: minX,
+            y: minY
+          });
+        }
+      }
+    }
+
+    return groups;
   }
 
   function screenToGrid(clientX, clientY) {
@@ -126,9 +201,9 @@
     ctx.fillStyle = "#ffffff";
     ctx.fillRect(0, 0, cfg.gridSize, cfg.gridSize);
 
-    for (const [xy, color] of pixels.entries()) {
+    for (const [xy, pixel] of pixels.entries()) {
       const [x, y] = xy.split(",").map(Number);
-      ctx.fillStyle = color;
+      ctx.fillStyle = pixel.color;
       ctx.fillRect(x, y, 1, 1);
     }
 
@@ -150,6 +225,25 @@
     }
 
     ctx.restore();
+
+    const groups = computeTaggedGroups();
+    if (groups.length > 0) {
+      ctx.save();
+      ctx.font = "bold 12px Trebuchet MS, Segoe UI, sans-serif";
+      ctx.textBaseline = "bottom";
+
+      for (const group of groups) {
+        const screenX = state.offsetX + group.x * state.scale + 4;
+        const screenY = state.offsetY + group.y * state.scale - 4;
+        ctx.lineWidth = 3;
+        ctx.strokeStyle = "#fffdf7";
+        ctx.fillStyle = "#2d1a03";
+        ctx.strokeText(group.tag, screenX, screenY);
+        ctx.fillText(group.tag, screenX, screenY);
+      }
+
+      ctx.restore();
+    }
   }
 
   async function loadCanvas() {
@@ -158,7 +252,7 @@
 
     pixels.clear();
     payload.pixels.forEach((pixel) => {
-      setPixel(pixel.x, pixel.y, pixel.color_hex);
+      setPixel(pixel.x, pixel.y, pixel.color_hex, pixel.owner_id, pixel.owner_tag);
     });
 
     draw();
@@ -167,11 +261,15 @@
   async function loadPalette() {
     const response = await fetch("/api/palette");
     if (!response.ok) {
+      setStatus("Unable to load color swatches.", true);
       return;
     }
 
     const payload = await response.json();
     state.palette = payload.palette;
+    if (state.palette.length > 0) {
+      state.activeColor = state.palette[0].color_hex.toUpperCase();
+    }
     renderPalette();
   }
 
@@ -199,7 +297,6 @@
       swatch.title = `${entry.color_hex} (${entry.scope})`;
       swatch.addEventListener("click", () => {
         state.activeColor = entry.color_hex;
-        activeColorInput.value = entry.color_hex;
         renderPalette();
       });
       paletteEl.appendChild(swatch);
@@ -327,33 +424,6 @@
       brushLabel.textContent = String(state.brushSize);
     });
 
-    activeColorInput.addEventListener("input", () => {
-      state.activeColor = activeColorInput.value.toUpperCase();
-      renderPalette();
-    });
-
-    addColorBtn.addEventListener("click", async () => {
-      if (!authenticated) {
-        setStatus("Login required to change palette.", true);
-        return;
-      }
-
-      const response = await fetch("/api/palette", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ color: state.activeColor })
-      });
-
-      if (!response.ok) {
-        const payload = await response.json();
-        setStatus(payload.error || "Unable to add color.", true);
-        return;
-      }
-
-      await loadPalette();
-      setStatus("Color added to your palette.");
-    });
-
     if (adminResetCanvasBtn) {
       adminResetCanvasBtn.addEventListener("click", async () => {
         const response = await fetch("/api/admin/reset-canvas", {
@@ -398,9 +468,7 @@
     resizeCanvas();
     await loadCanvas();
 
-    if (authenticated) {
-      await loadPalette();
-    }
+    await loadPalette();
 
     await loadLimits();
 

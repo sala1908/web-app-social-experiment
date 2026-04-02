@@ -1,9 +1,8 @@
 const GRID_SIZE = 1024;
 const MAX_BRUSH_SIZE = 5;
-const DAILY_MAX_PAINTS = 50;
+const DAILY_MAX_PAINTS = 100;
 const GUEST_MAX_PAINTS = Math.floor(DAILY_MAX_PAINTS / 2);
 const COOLDOWN_SECONDS = 0;
-const NUM_TREASURES = 10;
 
 
 const DEFAULT_PALETTE = [

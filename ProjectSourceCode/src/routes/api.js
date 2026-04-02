@@ -9,14 +9,11 @@ function isHexColor(color) {
   return /^#[0-9A-F]{6}$/i.test(color || "");
 }
 
-async function getAllowedColors(dbClient, userId) {
+async function getAllowedColors(dbClient) {
   const { rows } = await dbClient.query(
     `
       SELECT color_hex FROM default_palette
-      UNION
-      SELECT color_hex FROM user_palette WHERE user_id = $1
-    `,
-    [userId]
+    `
   );
 
   return new Set(rows.map((row) => row.color_hex.toUpperCase()));
@@ -64,7 +61,13 @@ function buildBrushCells(x, y, brushSize) {
 
 router.get("/canvas", async (req, res, next) => {
   try {
-    const { rows } = await pool.query("SELECT x, y, color_hex FROM canvas_pixels");
+    const { rows } = await pool.query(
+      `
+        SELECT cp.x, cp.y, cp.color_hex, cp.updated_by AS owner_id, UPPER(LEFT(u.email, 3)) AS owner_tag
+        FROM canvas_pixels cp
+        LEFT JOIN users u ON u.id = cp.updated_by
+      `
+    );
     return res.json({ gridSize: GRID_SIZE, pixels: rows });
   } catch (error) {
     return next(error);
@@ -99,7 +102,7 @@ router.get("/me/limits", async (req, res, next) => {
   }
 });
 
-router.get("/palette", requireAuth, async (req, res, next) => {
+router.get("/palette", async (req, res, next) => {
   if (req.session && req.session.isAdmin) {
     try {
       const { rows } = await pool.query(
@@ -114,15 +117,26 @@ router.get("/palette", requireAuth, async (req, res, next) => {
     }
   }
 
+  if (!req.session || !req.session.userId) {
+    try {
+      const { rows } = await pool.query(
+        `
+          SELECT color_hex, 'default' AS scope FROM default_palette
+          ORDER BY color_hex ASC
+        `
+      );
+      return res.json({ palette: rows, guest: true });
+    } catch (error) {
+      return next(error);
+    }
+  }
+
   try {
     const { rows } = await pool.query(
       `
         SELECT color_hex, 'default' AS scope FROM default_palette
-        UNION
-        SELECT color_hex, 'user' AS scope FROM user_palette WHERE user_id = $1
         ORDER BY color_hex ASC
-      `,
-      [req.session.userId]
+      `
     );
 
     return res.json({ palette: rows });
@@ -132,42 +146,11 @@ router.get("/palette", requireAuth, async (req, res, next) => {
 });
 
 router.post("/palette", requireAuth, async (req, res, next) => {
-  if (req.session && req.session.isAdmin) {
-    return res.status(403).json({ error: "Admin palette cannot be modified." });
-  }
-
-  const color = String(req.body.color || "").toUpperCase();
-  if (!isHexColor(color)) {
-    return res.status(400).json({ error: "Color must be a valid hex value like #A1B2C3." });
-  }
-
-  try {
-    await pool.query(
-      "INSERT INTO user_palette (user_id, color_hex) VALUES ($1, $2) ON CONFLICT DO NOTHING",
-      [req.session.userId, color]
-    );
-    return res.status(201).json({ color });
-  } catch (error) {
-    return next(error);
-  }
+  return res.status(403).json({ error: "Custom colors are disabled. Choose from swatches." });
 });
 
 router.delete("/palette/:color", requireAuth, async (req, res, next) => {
-  if (req.session && req.session.isAdmin) {
-    return res.status(403).json({ error: "Admin palette cannot be modified." });
-  }
-
-  const color = String(req.params.color || "").toUpperCase();
-  if (!isHexColor(color)) {
-    return res.status(400).json({ error: "Invalid color." });
-  }
-
-  try {
-    await pool.query("DELETE FROM user_palette WHERE user_id = $1 AND color_hex = $2", [req.session.userId, color]);
-    return res.status(204).send();
-  } catch (error) {
-    return next(error);
-  }
+  return res.status(403).json({ error: "Custom colors are disabled. Choose from swatches." });
 });
 
 router.post("/paint", async (req, res, next) => {
@@ -190,6 +173,7 @@ router.post("/paint", async (req, res, next) => {
   }
 
   const userId = req.session && req.session.userId ? req.session.userId : null;
+  const ownerTag = req.user && req.user.email ? req.user.email.slice(0, 3).toUpperCase() : null;
   const isGuest = !userId && !(req.session && req.session.isAdmin);
   const client = await pool.connect();
   try {
@@ -210,10 +194,10 @@ router.post("/paint", async (req, res, next) => {
       }
     }
 
-    const allowedColors = userId ? await getAllowedColors(client, userId) : null;
+    const allowedColors = await getAllowedColors(client);
     const color = rawColor.toUpperCase();
 
-    if (mode === "paint" && allowedColors && !allowedColors.has(color)) {
+    if (mode === "paint" && !allowedColors.has(color)) {
       await client.query("ROLLBACK");
       return res.status(403).json({ error: "Color is not in your allowed palette." });
     }
@@ -236,7 +220,7 @@ router.post("/paint", async (req, res, next) => {
             [userId, cell.x, cell.y, brushSize]
           );
         }
-        modifiedPixels.push({ x: cell.x, y: cell.y, color_hex: null });
+        modifiedPixels.push({ x: cell.x, y: cell.y, color_hex: null, owner_id: null, owner_tag: null });
       } else {
         await client.query(
           `
@@ -253,7 +237,13 @@ router.post("/paint", async (req, res, next) => {
             [userId, cell.x, cell.y, color, brushSize]
           );
         }
-        modifiedPixels.push({ x: cell.x, y: cell.y, color_hex: color });
+        modifiedPixels.push({
+          x: cell.x,
+          y: cell.y,
+          color_hex: color,
+          owner_id: userId,
+          owner_tag: ownerTag
+        });
       }
     }
 
