@@ -18,7 +18,7 @@ describe("Auth registration API", () => {
     if (server) {
       await new Promise((resolve, reject) => {
         server.close((error) => {
-          if (error && error.code !== "ERR_SERVER_NOT_RUNNING") return reject(error);
+          if (error) return reject(error);
           return resolve();
         });
       });
