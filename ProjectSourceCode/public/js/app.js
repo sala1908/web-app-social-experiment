@@ -41,6 +41,7 @@
 
   let socket = null;
   let paintInFlight = false;
+  let queuedPaint = null;
   let lastPaintSentAt = 0;
 
   function setStatus(message, isError = false) {
@@ -224,26 +225,7 @@
     });
   }
 
-  async function enqueuePaint(x, y) {
-  const dedupeKey = `${x}:${y}:${state.mode}:${state.brushSize}:${state.activeColor}`;
-  if (state.lastPaintKey === dedupeKey) {
-    return;
-  }
-
-  const now = Date.now();
-  if (now - lastPaintSentAt < 40) {
-    return;
-  }
-
-  if (paintInFlight) {
-    return;
-  }
-
-  state.lastPaintKey = dedupeKey;
-  lastPaintSentAt = now;
-  paintInFlight = true;
-
-  try {
+  async function sendPaint(x, y) {
     const response = await fetch("/api/paint", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -260,16 +242,48 @@
 
     if (!response.ok) {
       setStatus(payload.error || "Paint request failed.", true);
-      return;
+      return false;
     }
 
     state.remainingPaints = payload.remainingPaints;
     applyModifiedPixels(payload.modifiedPixels);
     updateUsage();
+    return true;
+  }
+
+  async function enqueuePaint(x, y) {
+  const dedupeKey = `${x}:${y}:${state.mode}:${state.brushSize}:${state.activeColor}`;
+  if (state.lastPaintKey === dedupeKey) {
+    return;
+  }
+
+  const now = Date.now();
+  if (now - lastPaintSentAt < 40) {
+    queuedPaint = { x, y, dedupeKey };
+    return;
+  }
+
+  if (paintInFlight) {
+    queuedPaint = { x, y, dedupeKey };
+    return;
+  }
+
+  state.lastPaintKey = dedupeKey;
+  lastPaintSentAt = now;
+  paintInFlight = true;
+
+  try {
+    await sendPaint(x, y);
   } catch {
     setStatus("Paint request failed.", true);
   } finally {
     paintInFlight = false;
+  }
+
+  if (queuedPaint) {
+    const next = queuedPaint;
+    queuedPaint = null;
+    await enqueuePaint(next.x, next.y);
   }
 }
 
@@ -324,6 +338,7 @@
 
       state.drawing = true;
       const point = screenToGrid(event.clientX, event.clientY);
+      applyOptimisticPaint(point.x, point.y);
       enqueuePaint(point.x, point.y);
     });
 
