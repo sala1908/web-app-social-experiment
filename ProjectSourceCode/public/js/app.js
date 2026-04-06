@@ -84,6 +84,29 @@
     draw();
   }
 
+  function applyOptimisticPaint(x, y) {
+  const offset = -Math.floor((state.brushSize - 1) / 2);
+
+  for (let row = 0; row < state.brushSize; row += 1) {
+    for (let col = 0; col < state.brushSize; col += 1) {
+      const px = x + offset + col;
+      const py = y + offset + row;
+
+      if (px < 0 || px >= cfg.gridSize || py < 0 || py >= cfg.gridSize) {
+        continue;
+      }
+
+      if (state.mode === "erase") {
+        setPixel(px, py, null);
+      } else {
+        setPixel(px, py, state.activeColor);
+      }
+    }
+  }
+
+  draw();
+}
+
   function screenToGrid(clientX, clientY) {
     const rect = canvas.getBoundingClientRect();
     const x = (clientX - rect.left - state.offsetX) / state.scale;
@@ -314,6 +337,7 @@
 
       if (state.drawing) {
         const point = screenToGrid(event.clientX, event.clientY);
+        applyOptimisticPaint(point.x, point.y);
         enqueuePaint(point.x, point.y);
       }
     });
