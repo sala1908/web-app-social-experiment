@@ -40,7 +40,8 @@
   };
 
   let socket = null;
-  let paintQueue = Promise.resolve();
+  let paintInFlight = false;
+  let lastPaintSentAt = 0;
 
   function setStatus(message, isError = false) {
     statusEl.textContent = message;
@@ -201,38 +202,53 @@
   }
 
   async function enqueuePaint(x, y) {
-    const dedupeKey = `${x}:${y}:${state.mode}:${state.brushSize}:${state.activeColor}`;
-    if (state.lastPaintKey === dedupeKey) {
+  const dedupeKey = `${x}:${y}:${state.mode}:${state.brushSize}:${state.activeColor}`;
+  if (state.lastPaintKey === dedupeKey) {
+    return;
+  }
+
+  const now = Date.now();
+  if (now - lastPaintSentAt < 40) {
+    return;
+  }
+
+  if (paintInFlight) {
+    return;
+  }
+
+  state.lastPaintKey = dedupeKey;
+  lastPaintSentAt = now;
+  paintInFlight = true;
+
+  try {
+    const response = await fetch("/api/paint", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        x,
+        y,
+        mode: state.mode,
+        brushSize: state.brushSize,
+        color: state.activeColor
+      })
+    });
+
+    const payload = await response.json();
+
+    if (!response.ok) {
+      setStatus(payload.error || "Paint request failed.", true);
       return;
     }
-    state.lastPaintKey = dedupeKey;
 
-    paintQueue = paintQueue.then(async () => {
-      const response = await fetch("/api/paint", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          x,
-          y,
-          mode: state.mode,
-          brushSize: state.brushSize,
-          color: state.activeColor
-        })
-      });
-
-      const payload = await response.json();
-      if (!response.ok) {
-        setStatus(payload.error || "Paint request failed.", true);
-        return;
-      }
-
-      state.remainingPaints = payload.remainingPaints;
-      applyModifiedPixels(payload.modifiedPixels);
-      updateUsage();
-    }).catch(() => {
-      setStatus("Paint request failed.", true);
-    });
+    state.remainingPaints = payload.remainingPaints;
+    applyModifiedPixels(payload.modifiedPixels);
+    updateUsage();
+  } catch {
+    setStatus("Paint request failed.", true);
+  } finally {
+    paintInFlight = false;
   }
+}
 
   function connectSocket() {
     socket = window.io();
