@@ -70,6 +70,10 @@ router.get("/me", (req, res) => {
   });
 });
 
+router.get("/welcome", (req, res) => {
+  return res.json({ status: "success", message: "Welcome!" });
+});
+
 router.get("/me/limits", requireAuth, async (req, res, next) => {
   if (req.session && req.session.isAdmin) {
     return res.json({ dailyMaxPaints: null, remainingPaints: null, unlimited: true });
