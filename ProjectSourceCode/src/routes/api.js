@@ -63,9 +63,8 @@ router.get("/canvas", async (req, res, next) => {
   try {
     const { rows } = await pool.query(
       `
-        SELECT cp.x, cp.y, cp.color_hex, cp.updated_by AS owner_id, UPPER(LEFT(u.email, 3)) AS owner_tag
+        SELECT cp.x, cp.y, cp.color_hex, cp.updated_by AS owner_id, cp.owner_tag
         FROM canvas_pixels cp
-        LEFT JOIN users u ON u.id = cp.updated_by
       `
     );
     return res.json({ gridSize: GRID_SIZE, pixels: rows });
@@ -173,7 +172,11 @@ router.post("/paint", async (req, res, next) => {
   }
 
   const userId = req.session && req.session.userId ? req.session.userId : null;
-  const ownerTag = req.user && req.user.email ? req.user.email.slice(0, 3).toUpperCase() : null;
+  const ownerTag = req.session && req.session.isAdmin
+    ? "~Admin~"
+    : req.user && req.user.email
+      ? req.user.email.slice(0, 3).toUpperCase()
+      : "Guest";
   const isGuest = !userId && !(req.session && req.session.isAdmin);
   const client = await pool.connect();
   try {
@@ -224,12 +227,12 @@ router.post("/paint", async (req, res, next) => {
       } else {
         await client.query(
           `
-            INSERT INTO canvas_pixels (x, y, color_hex, updated_by)
-            VALUES ($1, $2, $3, $4)
+            INSERT INTO canvas_pixels (x, y, color_hex, updated_by, owner_tag)
+            VALUES ($1, $2, $3, $4, $5)
             ON CONFLICT (x, y)
-            DO UPDATE SET color_hex = EXCLUDED.color_hex, updated_by = EXCLUDED.updated_by, updated_at = NOW()
+            DO UPDATE SET color_hex = EXCLUDED.color_hex, updated_by = EXCLUDED.updated_by, owner_tag = EXCLUDED.owner_tag, updated_at = NOW()
           `,
-          [cell.x, cell.y, color, userId]
+          [cell.x, cell.y, color, userId, ownerTag]
         );
         if (userId) {
           await client.query(

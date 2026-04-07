@@ -35,7 +35,9 @@
     panStartY: 0,
     drawing: false,
     lastPaintKey: "",
-    remainingPaints: null
+    remainingPaints: null,
+    hoveredGroup: null,
+    playerColors: {} // Map of player tags to colors
   };
 
   let socket = null;
@@ -95,11 +97,19 @@
     const byOwner = new Map();
 
     for (const [xy, pixel] of pixels.entries()) {
-      if (!pixel || !pixel.ownerId || !pixel.ownerTag) {
+      if (!pixel || !pixel.ownerTag) {
         continue;
       }
 
-      const ownerKey = String(pixel.ownerId);
+      if (!pixel.ownerId && pixel.ownerTag !== "~Admin~" && pixel.ownerTag !== "Guest") {
+        continue;
+      }
+
+      const ownerKey = pixel.ownerTag === "~Admin~"
+        ? "__ADMIN__"
+        : pixel.ownerTag === "Guest"
+          ? "__GUEST__"
+          : String(pixel.ownerId);
       if (!byOwner.has(ownerKey)) {
         byOwner.set(ownerKey, {
           tag: pixel.ownerTag,
@@ -129,6 +139,9 @@
         let size = 0;
         let minX = Infinity;
         let minY = Infinity;
+        let maxX = -Infinity;
+        let maxY = -Infinity;
+        const cells = new Set();
         const stack = [start];
 
         while (stack.length > 0) {
@@ -142,6 +155,9 @@
           size += 1;
           minX = Math.min(minX, x);
           minY = Math.min(minY, y);
+          maxX = Math.max(maxX, x);
+          maxY = Math.max(maxY, y);
+          cells.add(current);
 
           for (const [dx, dy] of neighbors) {
             const nextKey = keyFor(x + dx, y + dy);
@@ -151,11 +167,15 @@
           }
         }
 
-        if (size >= 3) {
+        if (size >= 1) {
           groups.push({
+            id: start,
             tag: ownerData.tag,
             x: minX,
-            y: minY
+            y: minY,
+            width: maxX - minX + 1,
+            height: maxY - minY + 1,
+            cells
           });
         }
       }
@@ -172,6 +192,83 @@
       x: Math.floor(x),
       y: Math.floor(y)
     };
+  }
+
+  function getRandomColor() {
+    const letters = "0123456789ABCDEF";
+    let color = "#";
+    for (let i = 0; i < 6; i++) {
+      color += letters[Math.floor(Math.random() * 16)];
+    }
+    return color;
+  }
+
+  function getPlayerLabelColor(tag) {
+    if (!state.playerColors[tag]) {
+      state.playerColors[tag] = getRandomColor();
+    }
+    return state.playerColors[tag];
+  }
+
+  function getKeyForColorIndex(index) {
+    // Map color index to keyboard key
+    // 0-8 -> 1-9
+    // 9 -> 0
+    // 10-19 -> Q, W, E, R, T, Y, U, I, O, P
+    if (index < 9) {
+      return String(index + 1); // 1-9
+    } else if (index === 9) {
+      return "0";
+    } else if (index < 20) {
+      const qwertyKeys = ["q", "w", "e", "r", "t", "y", "u", "i", "o", "p"];
+      return qwertyKeys[index - 10];
+    }
+    return null; // No key for 20+ colors
+  }
+
+  function getColorIndexForKey(key) {
+    // Reverse mapping from key to color index
+    const num = parseInt(key, 10);
+    if (!isNaN(num)) {
+      if (num === 0) return 9;
+      if (num >= 1 && num <= 9) return num - 1;
+    }
+    const qwertyKeys = ["q", "w", "e", "r", "t", "y", "u", "i", "o", "p"];
+    const qIndex = qwertyKeys.indexOf(key.toLowerCase());
+    if (qIndex !== -1) {
+      return 10 + qIndex;
+    }
+    return -1;
+  }
+
+  function getHoveredGroup(clientX, clientY) {
+    const rect = canvas.getBoundingClientRect();
+    
+    // Convert mouse position to grid coordinates
+    const gridX = (clientX - rect.left - state.offsetX) / state.scale;
+    const gridY = (clientY - rect.top - state.offsetY) / state.scale;
+    
+    // Check if grid position is in bounds
+    if (gridX < 0 || gridX >= cfg.gridSize || gridY < 0 || gridY >= cfg.gridSize) {
+      return null;
+    }
+    
+    // Get pixel at grid position
+    const key = keyFor(Math.floor(gridX), Math.floor(gridY));
+    const pixel = pixels.get(key);
+
+    if (!pixel || !pixel.ownerTag) {
+      return null;
+    }
+
+    const groups = computeTaggedGroups();
+    const group = groups.find((entry) => entry.tag === pixel.ownerTag && entry.cells.has(key));
+
+    if (group) {
+      return group;
+    }
+
+    return null;
   }
 
   function resizeCanvas() {
@@ -226,21 +323,21 @@
 
     ctx.restore();
 
-    const groups = computeTaggedGroups();
-    if (groups.length > 0) {
+    // Only draw the hovered group's label
+    if (state.hoveredGroup) {
       ctx.save();
       ctx.font = "bold 12px Trebuchet MS, Segoe UI, sans-serif";
       ctx.textBaseline = "bottom";
 
-      for (const group of groups) {
-        const screenX = state.offsetX + group.x * state.scale + 4;
-        const screenY = state.offsetY + group.y * state.scale - 4;
-        ctx.lineWidth = 3;
-        ctx.strokeStyle = "#fffdf7";
-        ctx.fillStyle = "#2d1a03";
-        ctx.strokeText(group.tag, screenX, screenY);
-        ctx.fillText(group.tag, screenX, screenY);
-      }
+      const screenX = state.offsetX + state.hoveredGroup.x * state.scale + 4;
+      const screenY = state.offsetY + state.hoveredGroup.y * state.scale - 4;
+      const labelColor = getPlayerLabelColor(state.hoveredGroup.tag);
+
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = "#fffdf7";
+      ctx.fillStyle = labelColor;
+      ctx.strokeText(state.hoveredGroup.tag, screenX, screenY);
+      ctx.fillText(state.hoveredGroup.tag, screenX, screenY);
 
       ctx.restore();
     }
@@ -286,7 +383,7 @@
 
   function renderPalette() {
     paletteEl.innerHTML = "";
-    state.palette.forEach((entry) => {
+    state.palette.forEach((entry, index) => {
       const swatch = document.createElement("button");
       swatch.type = "button";
       swatch.className = "palette-swatch";
@@ -294,7 +391,15 @@
         swatch.classList.add("active");
       }
       swatch.style.backgroundColor = entry.color_hex;
-      swatch.title = `${entry.color_hex} (${entry.scope})`;
+      
+      // Get keyboard key for this color
+      const keyLabel = getKeyForColorIndex(index);
+      swatch.title = `${entry.color_hex} (${entry.scope})${keyLabel ? ` - Press ${keyLabel.toUpperCase()}` : ""}`;
+      
+      if (keyLabel) {
+        swatch.innerHTML = `<span class="color-key">${keyLabel.toUpperCase()}</span>`;
+      }
+      
       swatch.addEventListener("click", () => {
         state.activeColor = entry.color_hex;
         renderPalette();
@@ -357,21 +462,60 @@
     window.addEventListener("resize", resizeCanvas);
     canvas.addEventListener("contextmenu", (event) => event.preventDefault());
 
+    canvas.addEventListener("mouseleave", () => {
+      state.hoveredGroup = null;
+      draw();
+    });
+
+    // Scroll wheel changes brush size
     canvas.addEventListener("wheel", (event) => {
       event.preventDefault();
-      const rect = canvas.getBoundingClientRect();
-      const mx = event.clientX - rect.left;
-      const my = event.clientY - rect.top;
+      
+      // Change brush size with scroll
+      const delta = event.deltaY < 0 ? 1 : -1;
+      const newSize = Math.max(1, Math.min(cfg.maxBrushSize, state.brushSize + delta));
+      state.brushSize = newSize;
+      brushInput.value = newSize;
+      brushLabel.textContent = String(newSize);
+    });
 
-      const worldX = (mx - state.offsetX) / state.scale;
-      const worldY = (my - state.offsetY) / state.scale;
+    // Keyboard controls for zoom and color selection
+    window.addEventListener("keydown", (event) => {
+      // +/- for zoom
+      if (event.key === "+" || event.key === "=") {
+        event.preventDefault();
+        const rect = canvas.getBoundingClientRect();
+        const mx = rect.width / 2;
+        const my = rect.height / 2;
+        const worldX = (mx - state.offsetX) / state.scale;
+        const worldY = (my - state.offsetY) / state.scale;
+        state.scale = Math.max(state.minScale, Math.min(state.maxScale, state.scale * 1.15));
+        state.offsetX = mx - worldX * state.scale;
+        state.offsetY = my - worldY * state.scale;
+        draw();
+        return;
+      }
 
-      const factor = event.deltaY < 0 ? 1.15 : 0.85;
-      state.scale = Math.max(state.minScale, Math.min(state.maxScale, state.scale * factor));
+      if (event.key === "-" || event.key === "_") {
+        event.preventDefault();
+        const rect = canvas.getBoundingClientRect();
+        const mx = rect.width / 2;
+        const my = rect.height / 2;
+        const worldX = (mx - state.offsetX) / state.scale;
+        const worldY = (my - state.offsetY) / state.scale;
+        state.scale = Math.max(state.minScale, Math.min(state.maxScale, state.scale * 0.85));
+        state.offsetX = mx - worldX * state.scale;
+        state.offsetY = my - worldY * state.scale;
+        draw();
+        return;
+      }
 
-      state.offsetX = mx - worldX * state.scale;
-      state.offsetY = my - worldY * state.scale;
-      draw();
+      // Color selection with number (0-9) and QWERTY keys
+      const colorIndex = getColorIndexForKey(event.key);
+      if (colorIndex >= 0 && colorIndex < state.palette.length) {
+        state.activeColor = state.palette[colorIndex].color_hex;
+        renderPalette();
+      }
     });
 
     canvas.addEventListener("mousedown", (event) => {
@@ -402,6 +546,13 @@
       if (state.drawing) {
         const point = screenToGrid(event.clientX, event.clientY);
         enqueuePaint(point.x, point.y);
+      }
+
+      // Track hovered group
+      const hovered = getHoveredGroup(event.clientX, event.clientY);
+      if (hovered?.id !== state.hoveredGroup?.id) {
+        state.hoveredGroup = hovered || null;
+        draw();
       }
     });
 
