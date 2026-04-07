@@ -6,36 +6,39 @@ const { pool } = require("../src/db/pool");
 chai.use(chaiHttp);
 const { expect } = chai;
 
-describe("Auth registration API", () => {
-  let server;
+let globalServer = null;
 
-  before(async () => {
-    const started = await startServer(0);
-    server = started.server;
-  });
+// Before all tests: start server once
+before(async function () {
+  this.timeout(10000);
+  const started = await startServer(0);
+  globalServer = started.server;
+});
 
-  after(async () => {
-    if (server) {
-      await new Promise((resolve, reject) => {
-        server.close((error) => {
-          if (error) return reject(error);
-          return resolve();
-        });
-      });
-    }
-    await pool.end();
-  });
+// After all tests: close server once
+after(async function () {
+  if (globalServer) {
+    globalServer.close();
+  }
+  await pool.end();
+});
 
-  it("Positive: registers a new user and inserts into users table", async () => {
+describe("Auth registration API", function () {
+  this.timeout(10000);
+
+  it("Positive: registers a new user and inserts into users table", async function () {
+    this.timeout(5000);
+    
     const email = `testuser_${Date.now()}@example.com`;
     const password = "validpass123";
 
     const res = await chai
-      .request(server)
+      .request(globalServer)
       .post("/auth/register")
       .type("form")
       .send({ email, password });
 
+    // chai-http follows redirects by default, so final status is 200 (home page)
     expect(res).to.have.status(200);
 
     const { rows } = await pool.query("SELECT id, email FROM users WHERE email = $1", [email]);
@@ -43,12 +46,14 @@ describe("Auth registration API", () => {
     expect(rows[0].email).to.equal(email);
   });
 
-  it("Negative: rejects registration when password is too short", async () => {
+  it("Negative: rejects registration when password is too short", async function () {
+    this.timeout(5000);
+    
     const email = `shortpass_${Date.now()}@example.com`;
     const password = "short";
 
     const res = await chai
-      .request(server)
+      .request(globalServer)
       .post("/auth/register")
       .type("form")
       .send({ email, password });
@@ -60,27 +65,12 @@ describe("Auth registration API", () => {
   });
 });
 
-describe("Paint API", () => {
-  let server;
+describe("Paint API", function () {
+  this.timeout(10000);
 
-  before(async () => {
-    const started = await startServer(0);
-    server = started.server;
-  });
-
-  after(async () => {
-    if (server) {
-      await new Promise((resolve, reject) => {
-        server.close((error) => {
-          if (error) return reject(error);
-          return resolve();
-        });
-      });
-    }
-    await pool.end();
-  });
-
-  it("Positive: successfully paints a pixel with valid coordinates and color", async () => {
+  it("Positive: successfully paints a pixel with valid coordinates and color", async function () {
+    this.timeout(5000);
+    
     const paintPayload = {
       x: 100,
       y: 150,
@@ -90,7 +80,7 @@ describe("Paint API", () => {
     };
 
     const res = await chai
-      .request(server)
+      .request(globalServer)
       .post("/api/paint")
       .send(paintPayload);
 
@@ -108,7 +98,9 @@ describe("Paint API", () => {
     expect(rows[0].color_hex).to.equal("#FF0000");
   });
 
-  it("Negative: rejects paint request with out-of-bounds coordinates", async () => {
+  it("Negative: rejects paint request with out-of-bounds coordinates", async function () {
+    this.timeout(5000);
+    
     const paintPayload = {
       x: -1,
       y: 500,
@@ -118,7 +110,7 @@ describe("Paint API", () => {
     };
 
     const res = await chai
-      .request(server)
+      .request(globalServer)
       .post("/api/paint")
       .send(paintPayload);
 
