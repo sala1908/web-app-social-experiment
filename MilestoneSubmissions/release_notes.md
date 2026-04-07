@@ -9,3 +9,6 @@ Mac:
 Denys:
 Sami:
 
+## Week 3 (v0.3)
+Sam: Improved UI for paint selection. Improved readability and updated readme. Updated daily limit counts to 100 instead of 50. This decision is arbitrary at this point will take some user sampling to determine a healthy number of 'free' pixels a day. 
+
