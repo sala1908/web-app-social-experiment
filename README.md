@@ -95,6 +95,7 @@ The application scripts defined in `ProjectSourceCode/package.json` are:
 - Sami Yohannes
 - Samuel Lauer
 - Denys Davydenko
+- Macallan Finigan
 
 ## Project Context
 

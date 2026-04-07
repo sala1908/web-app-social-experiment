@@ -1,8 +1,36 @@
 # User Acceptance Testing
 
 This is the last phase of the software testing process. During UAT, actual users test the software to make sure it can handle the required tasks in real-world scenarios, according to the specifications.
-Below are some sample test cases for UAT testing:
 
+## Test Environment
+
+All UAT test cases are executed against the following environment:
+
+**Server Configuration:**
+- Node.js runtime (LTS version) running on localhost:3000
+- Express.js web application framework
+- PostgreSQL database backend (version 12+)
+- Docker Compose orchestration (db and web services)
+
+**Browser and Client:**
+- Modern web browser (Chrome, Firefox, Safari, or Edge)
+- REST API client (Postman, curl, or chai-http for testing)
+
+**Database:**
+- PostgreSQL instance running in Docker container
+- Schema initialized from `schema.sql`
+- Default palette pre-populated in `default_palette` table
+
+**User Roles for Testing:**
+- Regular User: Non-admin account with standard painting privileges
+- Admin User: Account with access to reset and admin endpoints (username: admin, password: 12345678)
+- Guest User: Unauthenticated browser access
+
+---
+
+Below are UAT scenarios to validate core features:
+
+Sample authentication scenarios:
 -    User should be able to log in with correct credentials.
 -    User authentication fails when the user provides invalid credentials.
 -    The form provides the user with specific feedback about the error.
@@ -22,8 +50,23 @@ Information from the form is stored in the `users` table in the PostgreSQL datab
 Test every color palette for every type of user (guest, user, admin). This test depends on how color picking is implemented.
 Run either item 1 or item 2 below, depending on which palette implementation is active.
 
+**Tester Information:**
+- Target User Roles: Regular authenticated users and guest users
+- Tester Personas: Content creators who need fine-grained color control; casual users exploring the canvas
+- Prerequisites: Testers have registered or logged in; familiar with the application's paint interface
+- Expected User Technical Level: Intermediate (understands API responses and DB concepts for validation)
+
 	1. **Individual User Color Palette:**
 	   Validate that users can paint with colors available in their combined palette (`default_palette` plus their `user_palette`).
+
+	   **Test Data:**
+	   - Test User Email: `testpainter_<timestamp>@example.com`
+	   - Test User Password: `ValidPass123!`
+	   - Canvas Coordinates: x=512, y=512 (center of 1024x1024 grid)
+	   - Allowed Color Codes: #000000, #FFFFFF, #FF0000, #00FF00, #0000FF (from `default_palette`)
+	   - User-Specific Color: #FF7F00 (orange, added to `user_palette`)
+	   - Disallowed Color: #ABCDEF (not in either palette)
+	   - Brush Size: 1
 
 	   **Endpoints and DB interaction**
 	   - `GET /api/palette` returns allowed colors for the authenticated user from `default_palette` and `user_palette`.
@@ -57,6 +100,14 @@ Run either item 1 or item 2 below, depending on which palette implementation is 
 	2. **Level Based Color Palette:**
 	Validate that when level-based palette rules are enabled, users can use all colors unlocked at their current level and all previous levels, but not colors from higher levels.
 
+	   **Test Data:**
+	   - Test User: Created at Level 1
+	   - Level 1 Allowed Colors: #000000, #FFFFFF, #FF0000
+	   - Level 2 Unlocked Colors: #00FF00, #0000FF
+	   - Level 2+ Only Colors: #FFFF00, #FF7F00
+	   - Canvas Coordinates: x=256, y=256
+	   - Brush Size: 1
+
 		**Assumptions and DB interaction**
 		- Level progression is managed by application logic (or a separate service), while paint and palette effects still use existing tables.
 		- `GET /api/palette` returns the currently allowed color set for the authenticated user.
@@ -86,6 +137,21 @@ Run either item 1 or item 2 below, depending on which palette implementation is 
 Daily Paint Limit Enforcement
 Validate that regular users cannot exceed the configured daily paint cap and that limit values are consistently reflected in the API.
 
+**Tester Information:**
+- Target User Roles: Regular authenticated users (non-admin)
+- Tester Personas: Casual painters with daily participation habits; users who test boundary conditions
+- Prerequisites: Account registered and logged in; understands daily participation limits
+- Expected User Technical Level: Intermediate (can verify API response codes and count database records)
+
+**Test Data:**
+- Test User Email: `dailylimit_tester_<timestamp>@example.com`
+- Test User Password: `LimitTest123!`
+- Daily Paint Limit: 50 items (as per DAILY_MAX_PAINTS constant)
+- Test Color: #000000 (black, in default palette)
+- Canvas Coordinates: Various x, y pairs within [0, 1023]
+- Brush Size: 1
+- Time Zone: UTC (for paint_actions.created_at calculation)
+
 **Endpoints and DB interaction**
 - `GET /api/me/limits` returns current paint limits for authenticated users.
 - `POST /api/paint` consumes one daily action for regular users by inserting into `paint_actions`.
@@ -114,6 +180,20 @@ Acceptance Criteria:
 ## Test 3:
 Admin Controls and Safety
 Validate that admin-only reset endpoints are protected, execute correctly for admins, and preserve expected system behavior.
+
+**Tester Information:**
+- Target User Roles: System administrators and regular users (to verify access control)
+- Tester Personas: QA engineers testing access control; admin power user; regular user verifying rejection
+- Prerequisites: Admin account available (username: admin); regular user account available
+- Expected User Technical Level: Advanced (understands access control, database state verification, and API security)
+
+**Test Data:**
+- Admin Username: admin
+- Admin Password: 12345678
+- Regular User Email: `accesscontrol_user_<timestamp>@example.com`
+- Regular User Password: `RegularUser123!`
+- Pre-populated Canvas: Several pixels in `canvas_pixels` (added via normal paint flow)
+- Pre-populated Daily Actions: Several records in `paint_actions` for current day
 
 **Endpoints and DB interaction**
 - `POST /api/admin/reset-canvas` requires admin privileges and deletes all rows from `canvas_pixels`.
