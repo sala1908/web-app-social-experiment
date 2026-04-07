@@ -1,0 +1,36 @@
+<main class="auth-page profile-page">
+  <div class="auth-links">
+    <a href="/" class="home-button">Home</a>
+  </div>
+
+  <h1>My Profile</h1>
+
+  <section class="profile-section">
+    <h2>Account</h2>
+    <p><strong>Email:</strong> {{user.email}}</p>
+    <p><strong>Member since:</strong> {{memberSince}}</p>
+  </section>
+
+  <section class="profile-section">
+    <h2>Paint Stats</h2>
+    <p><strong>Total paints:</strong> {{stats.total_paints}}</p>
+    <p><strong>Pixels on canvas:</strong> {{stats.pixels_placed}}</p>
+  </section>
+
+  <section class="profile-section">
+    <h2>My Palette</h2>
+    {{#if palette.length}}
+      <div class="profile-palette">
+        {{#each palette}}
+          <div
+            class="profile-swatch"
+            style="background-color: {{color_hex}};"
+            title="{{color_hex}}"
+          ></div>
+        {{/each}}
+      </div>
+    {{else}}
+      <p>No custom colors yet. Add some on the canvas!</p>
+    {{/if}}
+  </section>
+</main>

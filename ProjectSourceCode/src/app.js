@@ -11,6 +11,7 @@ const { pool } = require("./db/pool");
 const authRoutes = require("./routes/auth");
 const apiRoutes = require("./routes/api");
 const pageRoutes = require("./routes/pages");
+const aboutRoutes = require("./routes/about");
 const { GRID_SIZE, MAX_BRUSH_SIZE, DAILY_MAX_PAINTS, COOLDOWN_SECONDS } = require("./config/constants");
 
 function createApp() {
@@ -90,6 +91,7 @@ function createApp() {
   app.use(pageRoutes);
   app.use("/auth", authRoutes);
   app.use("/api", apiRoutes);
+  app.use("/about", aboutRoutes);
 
   app.use((error, req, res, next) => {
     console.error(error);

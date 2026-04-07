@@ -5,12 +5,14 @@
       <a href="/" class="home-button">Home</a>
       {{#if isAuthenticated}}
         <span class="user-email">{{user.email}}</span>
+        <a href="/profile">Profile</a>
         <form method="POST" action="/auth/logout">
           <button type="submit">Logout</button>
         </form>
       {{else}}
         <a href="/login">Login</a>
         <a href="/register">Register</a>
+        <a href="/about" class="home-button">About Us</a>
       {{/if}}
     </div>
   </header>

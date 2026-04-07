@@ -204,3 +204,67 @@ body {
     min-height: 60vh;
   }
 }
+
+.about-page {
+  max-width: 800px;
+  margin: 0 auto;
+  padding: 2rem;
+}
+
+.about-section {
+  margin: 2rem 0;
+}
+
+.team-grid {
+  display: flex;
+  gap: 1.5rem;
+  flex-wrap: wrap;
+}
+
+.team-card {
+  text-align: center;
+  padding: 1rem;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  min-width: 140px;
+}
+
+.team-avatar {
+  font-size: 3rem;
+}
+
+.contact-link {
+  color: inherit;
+  font-weight: bold;
+}
+
+.profile-page {
+  max-width: 520px;
+}
+
+.profile-section {
+  margin: 1.5rem 0;
+  padding-top: 1rem;
+  border-top: 1px solid var(--line);
+}
+
+.profile-section h2 {
+  margin: 0 0 0.75rem;
+  font-size: 1rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--accent);
+}
+
+.profile-palette {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.profile-swatch {
+  width: 28px;
+  height: 28px;
+  border-radius: 5px;
+  border: 1px solid rgba(0,0,0,0.15);
+}
