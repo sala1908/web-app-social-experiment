@@ -8,14 +8,19 @@ const ADMIN_PASSWORD = "12345678";
 
 router.post("/register", async (req, res) => {
   const email = (req.body.email || "").trim().toLowerCase();
+  const username = (req.body.username || "").trim().toLowerCase();
   const password = req.body.password || "";
 
-  if (email === ADMIN_USERNAME) {
+  if (username === ADMIN_USERNAME) {
     return res.status(400).render("register", { title: "Register", error: "This username is reserved." });
   }
 
-  if (!email || !password) {
-    return res.status(400).render("register", { title: "Register", error: "Email and password are required." });
+  if (!email || !username || !password) {
+    return res.status(400).render("register", { title: "Register", error: "Username, email and password are required." });
+  }
+
+  if (!/^[a-z0-9_][a-z0-9_-]{2,23}$/.test(username)) {
+    return res.status(400).render("register", { title: "Register", error: "Username must be 3-24 characters and use letters, numbers, hyphens, or underscores." });
   }
 
   if (password.length < 8) {
@@ -23,10 +28,19 @@ router.post("/register", async (req, res) => {
   }
 
   try {
+    const blacklistResult = await pool.query(
+      "SELECT 1 FROM blacklisted_emails WHERE LOWER(email) = LOWER($1) LIMIT 1",
+      [email]
+    );
+
+    if (blacklistResult.rows.length > 0) {
+      return res.status(403).render("register", { title: "Register", error: "This email is banned from registering." });
+    }
+
     const passwordHash = await bcrypt.hash(password, 12);
     const { rows } = await pool.query(
-      "INSERT INTO users (email, password_hash) VALUES ($1, $2) RETURNING id, email",
-      [email, passwordHash]
+      "INSERT INTO users (email, username, password_hash) VALUES ($1, $2, $3) RETURNING id, email, username",
+      [email, username, passwordHash]
     );
 
     req.session.userId = rows[0].id;
@@ -54,7 +68,7 @@ router.post("/login", async (req, res) => {
   }
 
   try {
-    const { rows } = await pool.query("SELECT id, email, password_hash FROM users WHERE email = $1", [email]);
+    const { rows } = await pool.query("SELECT id, email, username, password_hash FROM users WHERE email = $1", [email]);
     const user = rows[0];
 
     if (!user) {
@@ -69,7 +83,7 @@ router.post("/login", async (req, res) => {
     req.session.userId = user.id;
     req.session.isAdmin = false;
     req.session.adminUsername = null;
-  delete req.session.guestPaintsRemaining;
+    delete req.session.guestPaintsRemaining;
     return res.redirect("/");
   } catch (error) {
     return res.status(500).render("login", { title: "Login", error: "Unable to login." });

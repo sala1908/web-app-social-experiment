@@ -67,6 +67,8 @@ function createApp() {
       req.user = {
         id: null,
         email: req.session.adminUsername || "admin",
+        username: "admin",
+        displayName: "admin",
         isAdmin: true
       };
       res.locals.currentUser = req.user;
@@ -78,8 +80,14 @@ function createApp() {
     }
 
     try {
-      const { rows } = await pool.query("SELECT id, email FROM users WHERE id = $1", [req.session.userId]);
-      req.user = rows[0] ? { ...rows[0], isAdmin: false } : null;
+      const { rows } = await pool.query("SELECT id, email, username FROM users WHERE id = $1", [req.session.userId]);
+      req.user = rows[0]
+        ? {
+            ...rows[0],
+            displayName: rows[0].username || rows[0].email.split("@")[0],
+            isAdmin: false
+          }
+        : null;
       res.locals.currentUser = req.user;
       return next();
     } catch (error) {

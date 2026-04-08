@@ -11,14 +11,52 @@
   const paletteEl = document.getElementById("palette");
   const brushInput = document.getElementById("brush-size");
   const brushLabel = document.getElementById("brush-size-label");
+  const interactionBackdrop = document.getElementById("interaction-backdrop");
+  const interactionModal = document.getElementById("interaction-modal");
+  const interactionTitle = document.getElementById("interaction-title");
+  const interactionSummary = document.getElementById("interaction-summary");
+  const interactionClose = document.getElementById("interaction-close");
+  const interactionAuthLinks = document.getElementById("interaction-auth-links");
   const adminResetCanvasBtn = document.getElementById("admin-reset-canvas");
   const adminResetLimitsBtn = document.getElementById("admin-reset-limits");
 
   const cfg = window.APP_CONFIG || { gridSize: 1024, maxBrushSize: 5 };
-  const authenticated = Boolean(window.APP_AUTHENTICATED);
-  const isAdmin = Boolean(window.APP_IS_ADMIN);
+  let isAdmin = window.APP_IS_ADMIN === true
+    || String(window.APP_IS_ADMIN).toLowerCase() === "true"
+    || Boolean(window.APP_USER && window.APP_USER.isAdmin)
+    || (window.APP_USER && String(window.APP_USER.username || "").toLowerCase() === "admin");
+  let authenticated = isAdmin
+    || window.APP_AUTHENTICATED === true
+    || String(window.APP_AUTHENTICATED).toLowerCase() === "true"
+    || (toolbar && toolbar.dataset && String(toolbar.dataset.authenticated).toLowerCase() === "true")
+    || Boolean(window.APP_USER && window.APP_USER.id);
+  let viewerRole = isAdmin ? "admin" : authenticated ? "user" : "guest";
+  let currentUser = window.APP_USER || null;
   const ctx = canvas.getContext("2d");
   const pixels = new Map();
+
+  function applyViewerStateFromUser(user, authFlag) {
+    currentUser = user || null;
+    const serverAdmin = Boolean(user && user.isAdmin);
+    const serverAuthenticated = Boolean(authFlag || serverAdmin || (user && user.id));
+    isAdmin = serverAdmin || isAdmin;
+    authenticated = serverAuthenticated;
+    viewerRole = isAdmin ? "admin" : authenticated ? "user" : "guest";
+  }
+
+  async function refreshViewerState() {
+    try {
+      const response = await fetch("/api/me", { cache: "no-store" });
+      if (!response.ok) {
+        return;
+      }
+
+      const payload = await response.json();
+      applyViewerStateFromUser(payload.user || null, Boolean(payload.authenticated));
+    } catch {
+      // Keep local role state when /api/me is unavailable.
+    }
+  }
 
   const state = {
     mode: "paint",
@@ -36,7 +74,11 @@
     drawing: false,
     lastPaintKey: "",
     remainingPaints: null,
+    ctrlPressed: false,
+    pendingTitle: null,
     hoveredGroup: null,
+    interactionGroup: null,
+    groups: [],
     playerColors: {} // Map of player tags to colors
   };
 
@@ -73,6 +115,36 @@
     return `${x},${y}`;
   }
 
+  function normalizeDisplayName(value) {
+    const text = String(value || "").trim();
+    if (!text) {
+      return "Guest";
+    }
+
+    if (text === "~Admin~" || text.toLowerCase() === "admin") {
+      return "Admin";
+    }
+
+    return text;
+  }
+
+  function getOwnershipKey(ownerId, ownerTag) {
+    const displayName = String(ownerTag || "").toLowerCase();
+    if (displayName === "admin" || displayName === "~admin~") {
+      return "__ADMIN__";
+    }
+
+    if (ownerId) {
+      return String(ownerId);
+    }
+
+    if (ownerTag === "Guest") {
+      return "__GUEST__";
+    }
+
+    return null;
+  }
+
   function setPixel(x, y, color, ownerId, ownerTag) {
     const key = keyFor(x, y);
     if (!color) {
@@ -81,7 +153,7 @@
       pixels.set(key, {
         color,
         ownerId,
-        ownerTag
+        ownerTag: normalizeDisplayName(ownerTag)
       });
     }
   }
@@ -94,6 +166,7 @@
   }
 
   function computeTaggedGroups() {
+    const MERGE_DISTANCE = 5;
     const byOwner = new Map();
 
     for (const [xy, pixel] of pixels.entries()) {
@@ -101,17 +174,15 @@
         continue;
       }
 
-      if (!pixel.ownerId && pixel.ownerTag !== "~Admin~" && pixel.ownerTag !== "Guest") {
+      const ownerKey = getOwnershipKey(pixel.ownerId, pixel.ownerTag);
+      if (!ownerKey) {
         continue;
       }
 
-      const ownerKey = pixel.ownerTag === "~Admin~"
-        ? "__ADMIN__"
-        : pixel.ownerTag === "Guest"
-          ? "__GUEST__"
-          : String(pixel.ownerId);
       if (!byOwner.has(ownerKey)) {
         byOwner.set(ownerKey, {
+          ownerKey,
+          ownerId: pixel.ownerId || null,
           tag: pixel.ownerTag,
           cells: new Set()
         });
@@ -120,7 +191,6 @@
       byOwner.get(ownerKey).cells.add(xy);
     }
 
-    const groups = [];
     const neighbors = [
       [1, 0],
       [-1, 0],
@@ -128,8 +198,17 @@
       [0, -1]
     ];
 
+    function componentDistance(a, b) {
+      const gapX = Math.max(0, Math.max(a.minX - b.maxX, b.minX - a.maxX));
+      const gapY = Math.max(0, Math.max(a.minY - b.maxY, b.minY - a.maxY));
+      return Math.hypot(gapX, gapY);
+    }
+
+    const groups = [];
+
     for (const ownerData of byOwner.values()) {
       const seen = new Set();
+      const components = [];
 
       for (const start of ownerData.cells) {
         if (seen.has(start)) {
@@ -141,7 +220,6 @@
         let minY = Infinity;
         let maxX = -Infinity;
         let maxY = -Infinity;
-        const cells = new Set();
         const stack = [start];
 
         while (stack.length > 0) {
@@ -157,7 +235,6 @@
           minY = Math.min(minY, y);
           maxX = Math.max(maxX, x);
           maxY = Math.max(maxY, y);
-          cells.add(current);
 
           for (const [dx, dy] of neighbors) {
             const nextKey = keyFor(x + dx, y + dy);
@@ -167,17 +244,91 @@
           }
         }
 
-        if (size >= 1) {
-          groups.push({
-            id: start,
-            tag: ownerData.tag,
-            x: minX,
-            y: minY,
-            width: maxX - minX + 1,
-            height: maxY - minY + 1,
-            cells
-          });
+        components.push({
+          id: start,
+          minX,
+          minY,
+          maxX,
+          maxY,
+          size
+        });
+      }
+
+      if (components.length === 0) {
+        continue;
+      }
+
+      const parent = components.map((_, index) => index);
+
+      function find(index) {
+        if (parent[index] !== index) {
+          parent[index] = find(parent[index]);
         }
+        return parent[index];
+      }
+
+      function union(aIndex, bIndex) {
+        const aRoot = find(aIndex);
+        const bRoot = find(bIndex);
+        if (aRoot !== bRoot) {
+          parent[bRoot] = aRoot;
+        }
+      }
+
+      for (let i = 0; i < components.length; i += 1) {
+        for (let j = i + 1; j < components.length; j += 1) {
+          if (componentDistance(components[i], components[j]) <= MERGE_DISTANCE) {
+            union(i, j);
+          }
+        }
+      }
+
+      const merged = new Map();
+      for (let i = 0; i < components.length; i += 1) {
+        const root = find(i);
+        const component = components[i];
+
+        if (!merged.has(root)) {
+          merged.set(root, {
+            id: component.id,
+            minX: component.minX,
+            minY: component.minY,
+            maxX: component.maxX,
+            maxY: component.maxY,
+            size: component.size
+          });
+          continue;
+        }
+
+        const current = merged.get(root);
+        current.minX = Math.min(current.minX, component.minX);
+        current.minY = Math.min(current.minY, component.minY);
+        current.maxX = Math.max(current.maxX, component.maxX);
+        current.maxY = Math.max(current.maxY, component.maxY);
+        current.size += component.size;
+      }
+
+      for (const mergedComp of merged.values()) {
+        if (mergedComp.size < 3) {
+          continue;
+        }
+
+        const width = mergedComp.maxX - mergedComp.minX + 1;
+        const height = mergedComp.maxY - mergedComp.minY + 1;
+        groups.push({
+          id: mergedComp.id,
+          ownerKey: ownerData.ownerKey,
+          ownerId: ownerData.ownerId,
+          tag: ownerData.tag,
+          x: mergedComp.minX,
+          y: mergedComp.minY,
+          width,
+          height,
+          centerX: mergedComp.minX + width / 2,
+          centerY: mergedComp.minY + height / 2,
+          radius: Math.max(3, Math.ceil(Math.max(width, height) / 2) + 2),
+          size: mergedComp.size
+        });
       }
     }
 
@@ -204,10 +355,85 @@
   }
 
   function getPlayerLabelColor(tag) {
+    if (String(tag || "").toLowerCase() === "admin") {
+      return "#7CFF00";
+    }
+
     if (!state.playerColors[tag]) {
       state.playerColors[tag] = getRandomColor();
     }
     return state.playerColors[tag];
+  }
+
+  function isPointInsideGroup(group, gridX, gridY) {
+    const dx = gridX + 0.5 - group.centerX;
+    const dy = gridY + 0.5 - group.centerY;
+    return (dx * dx) + (dy * dy) <= group.radius * group.radius;
+  }
+
+  function isCurrentUserGroup(group) {
+    if (group.ownerKey === "__ADMIN__") {
+      return isAdmin;
+    }
+
+    if (authenticated && currentUser && group.ownerId) {
+      return Number(currentUser.id) === Number(group.ownerId);
+    }
+
+    return false;
+  }
+
+  function isAdminGroup(group) {
+    return Boolean(group) && (group.ownerKey === "__ADMIN__" || String(group.tag || "").toLowerCase() === "admin");
+  }
+
+  async function fetchInteractionContext(group) {
+    if (!group) {
+      return { isFriend: false, bubbleTitle: null };
+    }
+
+    const query = new URLSearchParams({
+      targetUserId: group.ownerId || "",
+      targetOwnerTag: group.tag || "",
+      groupX: String(group.x),
+      groupY: String(group.y)
+    });
+
+    const response = await fetch(`/api/interactions/context?${query.toString()}`);
+    if (!response.ok) {
+      return { isFriend: false, bubbleTitle: null };
+    }
+
+    const payload = await response.json();
+    return {
+      isFriend: viewerRole === "user" ? Boolean(payload.isFriend) : false,
+      bubbleTitle: String(payload.bubbleTitle || "").trim() || null
+    };
+  }
+
+  function configureInteractionButtons(group, context) {
+    const isFriend = Boolean(context && context.isFriend);
+    const isOwnGroup = isCurrentUserGroup(group);
+    const actionButtons = Array.from(interactionModal.querySelectorAll("[data-interaction-type]"));
+
+    const visibleActions = isOwnGroup
+      ? (state.ctrlPressed && authenticated ? ["remove", "name"] : [])
+      : viewerRole === "guest"
+      ? []
+      : viewerRole === "admin"
+        ? ["love", "remove", "ban"]
+        : ["like", "dislike", "report", "friend"].concat(isFriend ? ["visit-profile"] : []);
+
+    actionButtons.forEach((button) => {
+      const type = button.getAttribute("data-interaction-type");
+      const visible = visibleActions.includes(type);
+      button.hidden = !visible;
+      button.disabled = !visible || (!authenticated && viewerRole !== "admin") || type === "visit-profile" || (type === "friend" && !group.ownerId);
+    });
+
+    if (interactionAuthLinks) {
+      interactionAuthLinks.hidden = authenticated;
+    }
   }
 
   function getKeyForColorIndex(index) {
@@ -253,22 +479,40 @@
       return null;
     }
     
-    // Get pixel at grid position
-    const key = keyFor(Math.floor(gridX), Math.floor(gridY));
-    const pixel = pixels.get(key);
+    const groups = state.groups.length > 0 ? state.groups : computeTaggedGroups();
+    const gridPointX = Math.floor(gridX);
+    const gridPointY = Math.floor(gridY);
 
-    if (!pixel || !pixel.ownerTag) {
-      return null;
+    return groups.find((entry) => {
+      if (!isPointInsideGroup(entry, gridPointX, gridPointY)) {
+        return false;
+      }
+
+      if (isCurrentUserGroup(entry) && !state.ctrlPressed) {
+        return false;
+      }
+
+      return true;
+    }) || null;
+  }
+
+  function tryOpenProtectedGroup(event) {
+    const hoveredGroup = getHoveredGroup(event.clientX, event.clientY);
+    if (!hoveredGroup) {
+      return false;
     }
 
-    const groups = computeTaggedGroups();
-    const group = groups.find((entry) => entry.tag === pixel.ownerTag && entry.cells.has(key));
-
-    if (group) {
-      return group;
+    const isOwn = isCurrentUserGroup(hoveredGroup);
+    if (isOwn && !event.ctrlKey) {
+      return false;
     }
 
-    return null;
+    event.preventDefault();
+    event.stopPropagation();
+    state.drawing = false;
+    state.hoveredGroup = hoveredGroup;
+    draw();
+    return true;
   }
 
   function resizeCanvas() {
@@ -286,6 +530,9 @@
     const dpr = window.devicePixelRatio || 1;
     const width = canvas.width / dpr;
     const height = canvas.height / dpr;
+    const groups = computeTaggedGroups();
+
+    state.groups = groups;
 
     ctx.clearRect(0, 0, width, height);
     ctx.fillStyle = "#e6decb";
@@ -302,6 +549,29 @@
       const [x, y] = xy.split(",").map(Number);
       ctx.fillStyle = pixel.color;
       ctx.fillRect(x, y, 1, 1);
+    }
+
+    if (groups.length > 0) {
+      ctx.save();
+      ctx.lineWidth = 1 / state.scale;
+      ctx.setLineDash([4 / state.scale, 3 / state.scale]);
+
+      for (const group of groups) {
+        if (isCurrentUserGroup(group) && !state.ctrlPressed) {
+          continue;
+        }
+
+        ctx.beginPath();
+        ctx.arc(group.centerX, group.centerY, group.radius, 0, Math.PI * 2);
+        ctx.fillStyle = "rgba(217, 95, 2, 0.06)";
+        ctx.strokeStyle = state.hoveredGroup && state.hoveredGroup.id === group.id
+          ? "rgba(217, 95, 2, 0.95)"
+          : "rgba(217, 95, 2, 0.3)";
+        ctx.fill();
+        ctx.stroke();
+      }
+
+      ctx.restore();
     }
 
     if (state.scale >= 12) {
@@ -323,24 +593,37 @@
 
     ctx.restore();
 
-    // Only draw the hovered group's label
     if (state.hoveredGroup) {
       ctx.save();
       ctx.font = "bold 12px Trebuchet MS, Segoe UI, sans-serif";
       ctx.textBaseline = "bottom";
 
-      const screenX = state.offsetX + state.hoveredGroup.x * state.scale + 4;
-      const screenY = state.offsetY + state.hoveredGroup.y * state.scale - 4;
+      const screenX = state.offsetX + state.hoveredGroup.centerX * state.scale;
+      const screenY = state.offsetY + (state.hoveredGroup.centerY - state.hoveredGroup.radius - 0.8) * state.scale;
       const labelColor = getPlayerLabelColor(state.hoveredGroup.tag);
+      const textWidth = ctx.measureText(state.hoveredGroup.tag).width;
+      const badgeWidth = textWidth + 18;
+      const badgeHeight = 22;
+
+      ctx.fillStyle = "rgba(255, 253, 247, 0.98)";
+      ctx.strokeStyle = "rgba(35, 26, 5, 0.08)";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.rect(screenX - badgeWidth / 2, screenY - badgeHeight + 2, badgeWidth, badgeHeight);
+      ctx.fill();
+      ctx.stroke();
 
       ctx.lineWidth = 3;
       ctx.strokeStyle = "#fffdf7";
       ctx.fillStyle = labelColor;
+      ctx.textAlign = "center";
       ctx.strokeText(state.hoveredGroup.tag, screenX, screenY);
       ctx.fillText(state.hoveredGroup.tag, screenX, screenY);
 
       ctx.restore();
     }
+
+    canvas.style.cursor = state.hoveredGroup ? "pointer" : state.panning ? "grabbing" : "crosshair";
   }
 
   async function loadCanvas() {
@@ -353,6 +636,144 @@
     });
 
     draw();
+  }
+
+  async function openInteractionModal(group) {
+    if (!group) {
+      return;
+    }
+
+    await refreshViewerState();
+
+    state.interactionGroup = group;
+    interactionTitle.textContent = isCurrentUserGroup(group) ? "Manage your bubble" : `React to ${group.tag}`;
+    interactionSummary.textContent = authenticated
+      ? `Created by ${group.tag}. Protected space: ${group.size} pixels, centered near (${group.x}, ${group.y}).`
+      : `Created by ${group.tag}. Protected space: ${group.size} pixels. Log in to post a reaction.`;
+    interactionBackdrop.hidden = false;
+    interactionModal.hidden = false;
+    interactionModal.setAttribute("aria-hidden", "false");
+
+    // Apply role-based defaults immediately so UI never shows a stale mixed action set.
+    configureInteractionButtons(group, { isFriend: false });
+
+    try {
+      const context = await fetchInteractionContext(group);
+      configureInteractionButtons(group, context);
+
+      if (context && context.bubbleTitle) {
+        interactionSummary.textContent = `${interactionSummary.textContent} Title: ${context.bubbleTitle}`;
+        state.interactionGroup.title = context.bubbleTitle;
+      }
+    } catch {
+      // Keep default role-based buttons if context lookup fails.
+    }
+
+    if (!authenticated) {
+      setStatus("Log in to react to a protected label.", true);
+    }
+  }
+
+  function closeInteractionModal() {
+    state.interactionGroup = null;
+    interactionBackdrop.hidden = true;
+    interactionModal.hidden = true;
+    interactionModal.setAttribute("aria-hidden", "true");
+
+    interactionModal.querySelectorAll("[data-interaction-type]").forEach((button) => {
+      button.disabled = false;
+      button.hidden = false;
+    });
+
+    if (interactionAuthLinks) {
+      interactionAuthLinks.hidden = true;
+    }
+  }
+
+  async function submitInteraction(interactionType) {
+    if (!state.interactionGroup) {
+      return;
+    }
+
+    if (interactionType === "visit-profile") {
+      setStatus("Visit Profile coming soon.");
+      return;
+    }
+
+    if (interactionType === "name") {
+      const existingTitle = String(state.interactionGroup.title || "").trim();
+      const nextTitle = window.prompt("Set a title for this bubble (max 80 characters):", existingTitle);
+      if (nextTitle === null) {
+        return;
+      }
+
+      const cleanTitle = nextTitle.trim();
+      if (!cleanTitle) {
+        setStatus("Title cannot be empty.", true);
+        return;
+      }
+
+      state.pendingTitle = cleanTitle.slice(0, 80);
+    } else {
+      state.pendingTitle = null;
+    }
+
+    if (viewerRole === "admin" && interactionType === "remove") {
+      const confirmed = window.confirm("Remove this entire bubble? This will clear all pixels in the selected bubble.");
+      if (!confirmed) {
+        return;
+      }
+    }
+
+    if (viewerRole === "admin" && interactionType === "ban") {
+      const confirmed = window.confirm("Ban this user? This will delete their account, clear all their pixels, and blacklist their email.");
+      if (!confirmed) {
+        return;
+      }
+    }
+
+    const targetGroup = state.interactionGroup;
+    const requestBody = {
+      interactionType,
+      targetUserId: targetGroup.ownerId,
+      targetOwnerTag: targetGroup.tag,
+      groupX: targetGroup.x,
+      groupY: targetGroup.y,
+      title: state.pendingTitle || undefined
+    };
+
+    const response = await fetch("/api/interactions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(requestBody)
+    });
+
+    const payload = await response.json();
+    if (!response.ok) {
+      setStatus(payload.error || "Unable to save interaction.", true);
+      return;
+    }
+
+    if (Array.isArray(payload.modifiedPixels) && payload.modifiedPixels.length > 0) {
+      applyModifiedPixels(payload.modifiedPixels);
+    }
+
+    if (interactionType === "name" && payload.bubbleTitle) {
+      state.interactionGroup.title = payload.bubbleTitle;
+    }
+
+    const actionLabels = {
+      like: "Like saved.",
+      dislike: "Dislike saved.",
+      report: "Report saved.",
+      love: "Love saved.",
+      remove: "Bubble removed.",
+      ban: "User banned and removed.",
+      friend: "Friend request sent.",
+      name: "Bubble title saved."
+    };
+    setStatus(actionLabels[interactionType] || "Reaction saved.", false);
+    closeInteractionModal();
   }
 
   async function loadPalette() {
@@ -481,6 +902,11 @@
 
     // Keyboard controls for zoom and color selection
     window.addEventListener("keydown", (event) => {
+      if (event.key === "Control" && !state.ctrlPressed) {
+        state.ctrlPressed = true;
+        draw();
+      }
+
       // +/- for zoom
       if (event.key === "+" || event.key === "=") {
         event.preventDefault();
@@ -518,6 +944,22 @@
       }
     });
 
+    window.addEventListener("keyup", (event) => {
+      if (event.key === "Control" && state.ctrlPressed) {
+        state.ctrlPressed = false;
+        state.hoveredGroup = null;
+        draw();
+      }
+    });
+
+    window.addEventListener("blur", () => {
+      if (state.ctrlPressed) {
+        state.ctrlPressed = false;
+        state.hoveredGroup = null;
+        draw();
+      }
+    });
+
     canvas.addEventListener("mousedown", (event) => {
       if (event.button === 2) {
         state.panning = true;
@@ -530,9 +972,27 @@
         return;
       }
 
+      const protectedGroup = getHoveredGroup(event.clientX, event.clientY);
+      if (protectedGroup) {
+        state.drawing = false;
+        state.hoveredGroup = protectedGroup;
+        draw();
+        return;
+      }
+
       state.drawing = true;
       const point = screenToGrid(event.clientX, event.clientY);
       enqueuePaint(point.x, point.y);
+    });
+
+    canvas.addEventListener("click", (event) => {
+      const opened = tryOpenProtectedGroup(event);
+      if (opened) {
+        const hoveredGroup = getHoveredGroup(event.clientX, event.clientY);
+        if (hoveredGroup) {
+          void openInteractionModal(hoveredGroup);
+        }
+      }
     });
 
     window.addEventListener("mousemove", (event) => {
@@ -544,11 +1004,13 @@
       }
 
       if (state.drawing) {
-        const point = screenToGrid(event.clientX, event.clientY);
-        enqueuePaint(point.x, point.y);
+        const hoveredDuringDrag = getHoveredGroup(event.clientX, event.clientY);
+        if (!hoveredDuringDrag || isCurrentUserGroup(hoveredDuringDrag)) {
+          const point = screenToGrid(event.clientX, event.clientY);
+          enqueuePaint(point.x, point.y);
+        }
       }
 
-      // Track hovered group
       const hovered = getHoveredGroup(event.clientX, event.clientY);
       if (hovered?.id !== state.hoveredGroup?.id) {
         state.hoveredGroup = hovered || null;
@@ -560,6 +1022,14 @@
       state.panning = false;
       state.drawing = false;
       state.lastPaintKey = "";
+    });
+
+    interactionBackdrop.addEventListener("click", closeInteractionModal);
+    interactionClose.addEventListener("click", closeInteractionModal);
+    interactionModal.querySelectorAll("[data-interaction-type]").forEach((button) => {
+      button.addEventListener("click", () => {
+        submitInteraction(button.getAttribute("data-interaction-type"));
+      });
     });
 
     toolbar.querySelectorAll("[data-mode]").forEach((button) => {
