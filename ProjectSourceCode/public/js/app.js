@@ -73,6 +73,7 @@
     panStartY: 0,
     drawing: false,
     lastPaintKey: "",
+    strokeDedupeKeys: new Set(),
     remainingPaints: null,
     ctrlPressed: false,
     pendingTitle: null,
@@ -84,6 +85,19 @@
 
   let socket = null;
   let paintQueue = Promise.resolve();
+  let drawScheduled = false;
+
+  function scheduleDraw() {
+    if (drawScheduled) {
+      return;
+    }
+
+    drawScheduled = true;
+    window.requestAnimationFrame(() => {
+      drawScheduled = false;
+      draw();
+    });
+  }
 
   function setStatus(message, isError = false) {
     statusEl.textContent = message;
@@ -162,7 +176,52 @@
     modifiedPixels.forEach((pixel) => {
       setPixel(pixel.x, pixel.y, pixel.color_hex, pixel.owner_id, pixel.owner_tag);
     });
-    draw();
+    scheduleDraw();
+  }
+
+  function getActivePainterIdentity() {
+    if (isAdmin) {
+      return { ownerId: null, ownerTag: "Admin" };
+    }
+
+    if (authenticated && currentUser && currentUser.id) {
+      const display = currentUser.username || (currentUser.email ? String(currentUser.email).split("@")[0] : "Guest");
+      return { ownerId: Number(currentUser.id), ownerTag: normalizeDisplayName(display) };
+    }
+
+    return { ownerId: null, ownerTag: "Guest" };
+  }
+
+  function buildBrushCellsForPoint(x, y, brushSize) {
+    const cells = [];
+    const offset = -Math.floor((brushSize - 1) / 2);
+
+    for (let row = 0; row < brushSize; row += 1) {
+      for (let col = 0; col < brushSize; col += 1) {
+        const nextX = x + offset + col;
+        const nextY = y + offset + row;
+        if (nextX < 0 || nextX >= cfg.gridSize || nextY < 0 || nextY >= cfg.gridSize) {
+          continue;
+        }
+        cells.push({ x: nextX, y: nextY });
+      }
+    }
+
+    return cells;
+  }
+
+  function applyLocalBrush(x, y, brushSize, colorHex, ownerId, ownerTag, mode) {
+    const cells = buildBrushCellsForPoint(x, y, brushSize);
+
+    const modified = cells.map((cell) => ({
+      x: cell.x,
+      y: cell.y,
+      color_hex: mode === "erase" ? null : colorHex,
+      owner_id: mode === "erase" ? null : ownerId,
+      owner_tag: mode === "erase" ? null : ownerTag
+    }));
+
+    applyModifiedPixels(modified);
   }
 
   function computeTaggedGroups() {
@@ -830,11 +889,20 @@
   }
 
   async function enqueuePaint(x, y) {
-    const dedupeKey = `${x}:${y}:${state.mode}:${state.brushSize}:${state.activeColor}`;
-    if (state.lastPaintKey === dedupeKey) {
+    const brushSize = state.brushSize;
+    const paintMode = state.mode;
+    const paintColor = state.activeColor;
+    const identity = getActivePainterIdentity();
+    const dedupeKey = `${x}:${y}:${paintMode}:${brushSize}:${paintColor}`;
+    if (state.lastPaintKey === dedupeKey || state.strokeDedupeKeys.has(dedupeKey)) {
       return;
     }
+
     state.lastPaintKey = dedupeKey;
+    state.strokeDedupeKeys.add(dedupeKey);
+
+    // Paint locally first so dragging feels immediate; server response reconciles state.
+    applyLocalBrush(x, y, brushSize, paintColor, identity.ownerId, identity.ownerTag, paintMode);
 
     paintQueue = paintQueue.then(async () => {
       const response = await fetch("/api/paint", {
@@ -843,15 +911,17 @@
         body: JSON.stringify({
           x,
           y,
-          mode: state.mode,
-          brushSize: state.brushSize,
-          color: state.activeColor
+          mode: paintMode,
+          brushSize,
+          color: paintColor
         })
       });
 
       const payload = await response.json();
       if (!response.ok) {
         setStatus(payload.error || "Paint request failed.", true);
+        // Re-sync after server rejection so optimistic local state does not drift.
+        await loadCanvas();
         return;
       }
 
@@ -904,7 +974,7 @@
     window.addEventListener("keydown", (event) => {
       if (event.key === "Control" && !state.ctrlPressed) {
         state.ctrlPressed = true;
-        draw();
+        scheduleDraw();
       }
 
       // +/- for zoom
@@ -918,7 +988,7 @@
         state.scale = Math.max(state.minScale, Math.min(state.maxScale, state.scale * 1.15));
         state.offsetX = mx - worldX * state.scale;
         state.offsetY = my - worldY * state.scale;
-        draw();
+        scheduleDraw();
         return;
       }
 
@@ -932,7 +1002,7 @@
         state.scale = Math.max(state.minScale, Math.min(state.maxScale, state.scale * 0.85));
         state.offsetX = mx - worldX * state.scale;
         state.offsetY = my - worldY * state.scale;
-        draw();
+        scheduleDraw();
         return;
       }
 
@@ -948,7 +1018,7 @@
       if (event.key === "Control" && state.ctrlPressed) {
         state.ctrlPressed = false;
         state.hoveredGroup = null;
-        draw();
+        scheduleDraw();
       }
     });
 
@@ -956,7 +1026,7 @@
       if (state.ctrlPressed) {
         state.ctrlPressed = false;
         state.hoveredGroup = null;
-        draw();
+        scheduleDraw();
       }
     });
 
@@ -976,7 +1046,7 @@
       if (protectedGroup) {
         state.drawing = false;
         state.hoveredGroup = protectedGroup;
-        draw();
+        scheduleDraw();
         return;
       }
 
@@ -999,7 +1069,7 @@
       if (state.panning) {
         state.offsetX = event.clientX - state.panStartX;
         state.offsetY = event.clientY - state.panStartY;
-        draw();
+        scheduleDraw();
         return;
       }
 
@@ -1014,7 +1084,7 @@
       const hovered = getHoveredGroup(event.clientX, event.clientY);
       if (hovered?.id !== state.hoveredGroup?.id) {
         state.hoveredGroup = hovered || null;
-        draw();
+        scheduleDraw();
       }
     });
 
@@ -1022,6 +1092,7 @@
       state.panning = false;
       state.drawing = false;
       state.lastPaintKey = "";
+      state.strokeDedupeKeys.clear();
     });
 
     interactionBackdrop.addEventListener("click", closeInteractionModal);
@@ -1059,7 +1130,7 @@
         }
 
         pixels.clear();
-        draw();
+        scheduleDraw();
         setStatus("Canvas reset complete.");
       });
     }
