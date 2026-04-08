@@ -54,6 +54,22 @@ function buildBrushCells(x, y, brushSize) {
   return cells;
 }
 
+function uniqueCells(cells) {
+  const seen = new Set();
+  const result = [];
+
+  for (const cell of cells) {
+    const key = `${cell.x},${cell.y}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    result.push(cell);
+  }
+
+  return result;
+}
+
 router.get("/canvas", async (req, res, next) => {
   try {
     const { rows } = await pool.query("SELECT x, y, color_hex FROM canvas_pixels");
@@ -158,6 +174,8 @@ router.delete("/palette/:color", requireAuth, async (req, res, next) => {
 });
 
 router.post("/paint", async (req, res, next) => {
+
+  
   const x = Number(req.body.x);
   const y = Number(req.body.y);
   const brushSize = Number(req.body.brushSize || 1);
@@ -238,6 +256,141 @@ router.post("/paint", async (req, res, next) => {
     await client.query("COMMIT");
 
     const nextRemaining = typeof remaining === "number" ? Math.max(0, remaining - 1) : null;
+    const io = req.app.get("io");
+    if (io) {
+      io.emit("paint_applied", {
+        mode,
+        brushSize,
+        userId,
+        modifiedPixels
+      });
+    }
+
+    return res.json({
+      ok: true,
+      remainingPaints: nextRemaining,
+      modifiedPixels
+    });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    return next(error);
+  } finally {
+    client.release();
+  }
+});
+
+router.post("/paint-batch", async (req, res, next) => {
+  const points = Array.isArray(req.body.points) ? req.body.points : [];
+  const brushSize = Number(req.body.brushSize || 1);
+  const mode = req.body.mode === "erase" ? "erase" : "paint";
+  const rawColor = String(req.body.color || "").toUpperCase();
+
+  if (points.length === 0) {
+    return res.status(400).json({ error: "At least one point is required." });
+  }
+
+  if (points.length > 500) {
+    return res.status(400).json({ error: "Batch too large." });
+  }
+
+  if (!Number.isInteger(brushSize) || brushSize < 1 || brushSize > MAX_BRUSH_SIZE) {
+    return res.status(400).json({ error: `Brush size must be between 1 and ${MAX_BRUSH_SIZE}.` });
+  }
+
+  if (mode === "paint" && !isHexColor(rawColor)) {
+    return res.status(400).json({ error: "Paint mode requires a valid hex color." });
+  }
+
+  const normalizedPoints = [];
+  for (const point of points) {
+    const x = Number(point.x);
+    const y = Number(point.y);
+
+    if (!Number.isInteger(x) || !Number.isInteger(y) || x < 0 || y < 0 || x >= GRID_SIZE || y >= GRID_SIZE) {
+      return res.status(400).json({ error: "One or more coordinates are out of bounds." });
+    }
+
+    normalizedPoints.push({ x, y });
+  }
+
+  const userId = req.session && req.session.userId ? req.session.userId : null;
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+
+    let remaining = null;
+    if (userId) {
+      remaining = await getRemainingPaints(client, userId);
+      if (remaining <= 0) {
+        await client.query("ROLLBACK");
+        return res.status(429).json({
+          error: "Daily paint limit reached.",
+          dailyMaxPaints: DAILY_MAX_PAINTS,
+          remainingPaints: 0
+        });
+      }
+    }
+
+    const allowedColors = userId ? await getAllowedColors(client, userId) : null;
+    const color = rawColor.toUpperCase();
+
+    if (mode === "paint" && allowedColors && !allowedColors.has(color)) {
+      await client.query("ROLLBACK");
+      return res.status(403).json({ error: "Color is not in your allowed palette." });
+    }
+
+    if (userId) {
+      await client.query("INSERT INTO paint_actions (user_id) VALUES ($1)", [userId]);
+    }
+
+    let expandedCells = [];
+    for (const point of normalizedPoints) {
+      expandedCells.push(...buildBrushCells(point.x, point.y, brushSize));
+    }
+
+    expandedCells = uniqueCells(expandedCells);
+
+    const modifiedPixels = [];
+
+    for (const cell of expandedCells) {
+      if (mode === "erase") {
+        await client.query("DELETE FROM canvas_pixels WHERE x = $1 AND y = $2", [cell.x, cell.y]);
+
+        if (userId) {
+          await client.query(
+            "INSERT INTO pixel_history (user_id, x, y, color_hex, action, brush_size) VALUES ($1, $2, $3, NULL, 'erase', $4)",
+            [userId, cell.x, cell.y, brushSize]
+          );
+        }
+
+        modifiedPixels.push({ x: cell.x, y: cell.y, color_hex: null });
+      } else {
+        await client.query(
+          `
+            INSERT INTO canvas_pixels (x, y, color_hex, updated_by)
+            VALUES ($1, $2, $3, $4)
+            ON CONFLICT (x, y)
+            DO UPDATE SET color_hex = EXCLUDED.color_hex, updated_by = EXCLUDED.updated_by, updated_at = NOW()
+          `,
+          [cell.x, cell.y, color, userId]
+        );
+
+        if (userId) {
+          await client.query(
+            "INSERT INTO pixel_history (user_id, x, y, color_hex, action, brush_size) VALUES ($1, $2, $3, $4, 'paint', $5)",
+            [userId, cell.x, cell.y, color, brushSize]
+          );
+        }
+
+        modifiedPixels.push({ x: cell.x, y: cell.y, color_hex: color });
+      }
+    }
+
+    await client.query("COMMIT");
+
+    const nextRemaining = typeof remaining === "number" ? Math.max(0, remaining - 1) : null;
+
     const io = req.app.get("io");
     if (io) {
       io.emit("paint_applied", {
