@@ -294,3 +294,70 @@ router.post("/admin/reset-daily-limit", requireAdmin, async (req, res, next) => 
 });
 
 module.exports = router;
+
+// ── Friends ──────────────────────────────────────────────────────────────────
+
+router.get("/friends", requireAuth, async (req, res, next) => {
+  const userId = req.session.userId;
+  try {
+    const { rows } = await pool.query(
+      `SELECT u.id, u.email, f.status,
+              CASE WHEN f.requester_id = $1 THEN 'sent' ELSE 'received' END AS direction
+       FROM friendships f
+       JOIN users u ON u.id = CASE WHEN f.requester_id = $1 THEN f.addressee_id ELSE f.requester_id END
+       WHERE ($1 = f.requester_id OR $1 = f.addressee_id)
+       ORDER BY f.created_at DESC`,
+      [userId]
+    );
+    return res.json({ friends: rows });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+router.post("/friends/request", requireAuth, async (req, res, next) => {
+  const requesterId = req.session.userId;
+  const email = String(req.body.email || "").trim().toLowerCase();
+  if (!email) return res.status(400).json({ error: "Email is required." });
+  try {
+    const { rows } = await pool.query("SELECT id FROM users WHERE LOWER(email) = $1", [email]);
+    if (!rows.length) return res.status(404).json({ error: "No user with that email." });
+    const addresseeId = rows[0].id;
+    if (addresseeId === requesterId) return res.status(400).json({ error: "You can't friend yourself." });
+    await pool.query(
+      "INSERT INTO friendships (requester_id, addressee_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+      [requesterId, addresseeId]
+    );
+    return res.status(201).json({ ok: true });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+router.post("/friends/accept/:id", requireAuth, async (req, res, next) => {
+  const userId = req.session.userId;
+  const friendId = Number(req.params.id);
+  try {
+    await pool.query(
+      "UPDATE friendships SET status = 'accepted' WHERE requester_id = $1 AND addressee_id = $2 AND status = 'pending'",
+      [friendId, userId]
+    );
+    return res.json({ ok: true });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+router.delete("/friends/:id", requireAuth, async (req, res, next) => {
+  const userId = req.session.userId;
+  const otherId = Number(req.params.id);
+  try {
+    await pool.query(
+      "DELETE FROM friendships WHERE (requester_id = $1 AND addressee_id = $2) OR (requester_id = $2 AND addressee_id = $1)",
+      [userId, otherId]
+    );
+    return res.status(204).send();
+  } catch (err) {
+    return next(err);
+  }
+});

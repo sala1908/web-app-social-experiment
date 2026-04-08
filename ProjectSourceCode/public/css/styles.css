@@ -204,3 +204,118 @@ body {
     min-height: 60vh;
   }
 }
+
+/* ── Friends button ── */
+.friends-button {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #ffffff;
+  color: var(--ink);
+  padding: 6px 10px;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+/* ── Friends modal ── */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+.modal-overlay.hidden { display: none; }
+.modal-box {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  width: min(480px, 95vw);
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--line);
+}
+.modal-header h2 { margin: 0; font-size: 1.1rem; }
+.modal-close {
+  background: none;
+  border: none;
+  font-size: 1.4rem;
+  cursor: pointer;
+  color: var(--ink);
+  line-height: 1;
+}
+.modal-body {
+  padding: 16px 18px;
+  overflow-y: auto;
+}
+.modal-body h3 { margin: 14px 0 6px; font-size: 0.95rem; color: #5e4d2e; }
+.friend-add {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+  margin-bottom: 10px;
+}
+.friend-add input {
+  flex: 1;
+  min-width: 160px;
+  padding: 7px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+}
+.friend-add button {
+  padding: 7px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--accent);
+  color: white;
+  cursor: pointer;
+}
+.friend-msg { font-size: 0.85rem; }
+.friend-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.friend-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.friend-item span { flex: 1; font-size: 0.9rem; }
+.friend-item .sent-label { font-size: 0.8rem; color: #888; }
+.btn-accept {
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: 1px solid #2e7d32;
+  background: #e8f5e9;
+  color: #2e7d32;
+  cursor: pointer;
+  font-size: 0.82rem;
+}
+.btn-remove {
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: 1px solid #b42318;
+  background: #fff1ef;
+  color: #b42318;
+  cursor: pointer;
+  font-size: 0.82rem;
+}
+.empty { color: #999; font-size: 0.88rem; padding: 4px 0; }

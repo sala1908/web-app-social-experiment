@@ -66,3 +66,16 @@ VALUES
   ('#FF00FF'),
   ('#7F7F7F')
 ON CONFLICT DO NOTHING;
+
+CREATE TABLE IF NOT EXISTS friendships (
+  id SERIAL PRIMARY KEY,
+  requester_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  addressee_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  status TEXT NOT NULL DEFAULT 'pending',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (requester_id, addressee_id),
+  CHECK (requester_id <> addressee_id),
+  CHECK (status IN ('pending', 'accepted'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_friendships_addressee ON friendships (addressee_id, status);
