@@ -20,6 +20,7 @@
   const isAdmin = Boolean(window.APP_IS_ADMIN);
   const ctx = canvas.getContext("2d");
   const pixels = new Map();
+  
 
   const state = {
     mode: "paint",
@@ -39,10 +40,11 @@
     remainingPaints: null
   };
 
-let socket = null;
-let pendingPixels = new Map();
-let batchRequestInFlight = false;
-let batchFlushTimer = null;
+  let socket = null;
+  let pendingPixels = new Map();
+  let batchRequestInFlight = false;
+  let batchFlushTimer = null;
+  let inflightPixels = new Map();
 
   function setStatus(message, isError = false) {
     statusEl.textContent = message;
@@ -78,11 +80,11 @@ let batchFlushTimer = null;
     }
   }
 
-  function applyQueuedPixel(x, y) {
-    if (state.mode === "erase") {
-      setPixel(x, y, null);
+  function applyQueuedPixel(pixel) {
+    if (pixel.mode === "erase") {
+      setPixel(pixel.x, pixel.y, null);
     } else {
-      setPixel(x, y, state.activeColor);
+      setPixel(pixel.x, pixel.y, pixel.color);
     }
   }
 
@@ -90,99 +92,129 @@ let batchFlushTimer = null;
     modifiedPixels.forEach((pixel) => {
       setPixel(pixel.x, pixel.y, pixel.color_hex);
     });
+
+    reapplyPendingPixels();
     draw();
   }
 
-function queueBrushChange(x, y) {
-  const offset = -Math.floor((state.brushSize - 1) / 2);
-
-
-
-  for (let row = 0; row < state.brushSize; row += 1) {
-    for (let col = 0; col < state.brushSize; col += 1) {
-      const px = x + offset + col;
-      const py = y + offset + row;
-      queuePixelChange(px, py);
-    }
-  }
-
-    draw();
-}
-
-function queuePixelChange(x, y) {
-  if (x < 0 || x >= cfg.gridSize || y < 0 || y >= cfg.gridSize) {
-    return;
-  }
-
-  const key = batchKeyFor(x, y);
-  pendingPixels.set(key, { x, y });
-
-  applyQueuedPixel(x, y);
-
-  if (pendingPixels.size >= 100) {
-    flushPaintBatch();
-    return;
-  }
-
-  if (!batchFlushTimer) {
-    batchFlushTimer = window.setTimeout(() => {
-      flushPaintBatch();
-    }, 50);
-  }
-}
-
-async function flushPaintBatch() {
-  if (batchRequestInFlight) {
-    return;
-  }
-
-  if (batchFlushTimer) {
-    clearTimeout(batchFlushTimer);
-    batchFlushTimer = null;
-  }
-
-  if (pendingPixels.size === 0) {
-    return;
-  }
-
-  const points = Array.from(pendingPixels.values());
-  pendingPixels = new Map();
-  batchRequestInFlight = true;
-
-  try {
-    const response = await fetch("/api/paint-batch", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        points,
-        mode: state.mode,
-        brushSize: 1,
-        color: state.activeColor
-      })
-    });
-
-    const payload = await response.json();
-
-    if (!response.ok) {
-      setStatus(payload.error || "Paint batch failed.", true);
-      return;
-    }
-
-    state.remainingPaints = payload.remainingPaints;
-    applyModifiedPixels(payload.modifiedPixels);
-    updateUsage();
-
-  } catch {
-    setStatus("Paint batch failed.", true);
-  } finally {
-    batchRequestInFlight = false;
-
-    // 🔥 THIS IS CRITICAL
+  function flushBeforeToolChange() {
     if (pendingPixels.size > 0) {
       flushPaintBatch();
     }
   }
-}
+
+  function queueBrushChange(x, y) {
+    const offset = -Math.floor((state.brushSize - 1) / 2);
+
+
+
+    for (let row = 0; row < state.brushSize; row += 1) {
+      for (let col = 0; col < state.brushSize; col += 1) {
+        const px = x + offset + col;
+        const py = y + offset + row;
+        queuePixelChange(px, py);
+      }
+    }
+
+    draw();
+  }
+
+  function queuePixelChange(x, y) {
+    if (x < 0 || x >= cfg.gridSize || y < 0 || y >= cfg.gridSize) {
+      return;
+    }
+
+    const key = batchKeyFor(x, y);
+    const queuedPixel = {
+      x,
+      y,
+      mode: state.mode,
+      color: state.activeColor
+    };
+
+    pendingPixels.set(key, queuedPixel);
+    applyQueuedPixel(queuedPixel);
+
+    if (pendingPixels.size >= 100) {
+      flushPaintBatch();
+      return;
+    }
+
+    if (!batchFlushTimer) {
+      batchFlushTimer = window.setTimeout(() => {
+        flushPaintBatch();
+      }, 50);
+    }
+  }
+
+  function reapplyPendingPixels() {
+    for (const pixel of inflightPixels.values()) {
+      applyQueuedPixel(pixel);
+    }
+
+    for (const pixel of pendingPixels.values()) {
+      applyQueuedPixel(pixel);
+    }
+  }
+
+  async function flushPaintBatch() {
+    if (batchRequestInFlight) {
+      return;
+    }
+
+    if (batchFlushTimer) {
+      clearTimeout(batchFlushTimer);
+      batchFlushTimer = null;
+    }
+
+    if (pendingPixels.size === 0) {
+      return;
+    }
+
+    inflightPixels = pendingPixels;
+    pendingPixels = new Map();
+
+    const points = Array.from(inflightPixels.values()).map(p => ({
+      x: p.x,
+      y: p.y
+    }));
+    batchRequestInFlight = true;
+
+    try {
+      const response = await fetch("/api/paint-batch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          points,
+          mode: state.mode,
+          brushSize: 1,
+          color: state.activeColor
+        })
+      });
+
+      const payload = await response.json();
+
+      if (!response.ok) {
+        setStatus(payload.error || "Paint batch failed.", true);
+        return;
+      }
+
+      state.remainingPaints = payload.remainingPaints;
+      applyModifiedPixels(payload.modifiedPixels);
+      updateUsage();
+
+      inflightPixels = new Map();
+
+    } catch {
+      setStatus("Paint batch failed.", true);
+    } finally {
+      batchRequestInFlight = false;
+
+      if (pendingPixels.size > 0) {
+        flushPaintBatch();
+      }
+    }
+  }
 
   function screenToGrid(clientX, clientY) {
     const rect = canvas.getBoundingClientRect();
@@ -299,7 +331,7 @@ async function flushPaintBatch() {
       });
       paletteEl.appendChild(swatch);
     });
-  }  
+  }
 
   function connectSocket() {
     socket = window.io();
@@ -339,6 +371,7 @@ async function flushPaintBatch() {
     });
 
     canvas.addEventListener("mousedown", (event) => {
+      flushBeforeToolChange();
       if (event.button === 2) {
         state.panning = true;
         state.panStartX = event.clientX - state.offsetX;
@@ -378,6 +411,8 @@ async function flushPaintBatch() {
 
     toolbar.querySelectorAll("[data-mode]").forEach((button) => {
       button.addEventListener("click", () => {
+        flushBeforeToolChange(); // 
+
         state.mode = button.getAttribute("data-mode");
         toolbar.querySelectorAll("[data-mode]").forEach((btn) => btn.classList.remove("active"));
         button.classList.add("active");
@@ -385,11 +420,15 @@ async function flushPaintBatch() {
     });
 
     brushInput.addEventListener("input", () => {
+      flushBeforeToolChange(); // 
+
       state.brushSize = Number(brushInput.value);
       brushLabel.textContent = String(state.brushSize);
     });
 
     activeColorInput.addEventListener("input", () => {
+      flushBeforeToolChange(); // 
+
       state.activeColor = activeColorInput.value.toUpperCase();
       renderPalette();
     });
