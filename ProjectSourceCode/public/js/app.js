@@ -37,6 +37,7 @@
     panStartY: 0,
     drawing: false,
     lastPaintKey: "",
+    lastDragPoint: null,
     remainingPaints: null
   };
 
@@ -226,6 +227,43 @@
     };
   }
 
+  function getLinePoints(startX, startY, endX, endY) {
+  const points = [];
+
+  let x = startX;
+  let y = startY;
+
+  const dx = Math.abs(endX - startX);
+  const dy = Math.abs(endY - startY);
+
+  const sx = startX < endX ? 1 : -1;
+  const sy = startY < endY ? 1 : -1;
+
+  let err = dx - dy;
+
+  while (true) {
+    points.push({ x, y });
+
+    if (x === endX && y === endY) {
+      break;
+    }
+
+    const e2 = err * 2;
+
+    if (e2 > -dy) {
+      err -= dy;
+      x += sx;
+    }
+
+    if (e2 < dx) {
+      err += dx;
+      y += sy;
+    }
+  }
+
+  return points;
+}
+
   function resizeCanvas() {
     const dpr = window.devicePixelRatio || 1;
     const shell = document.querySelector(".canvas-shell");
@@ -385,6 +423,7 @@
 
       state.drawing = true;
       const point = screenToGrid(event.clientX, event.clientY);
+      state.lastDragPoint = point;
       queueBrushChange(point.x, point.y);
     });
 
@@ -398,13 +437,30 @@
 
       if (state.drawing) {
         const point = screenToGrid(event.clientX, event.clientY);
-        queueBrushChange(point.x, point.y);
+
+        if (!state.lastDragPoint) {
+          state.lastDragPoint = point;
+        }
+
+        const linePoints = getLinePoints(
+          state.lastDragPoint.x,
+          state.lastDragPoint.y,
+          point.x,
+          point.y
+        );
+
+        for (const p of linePoints) {
+          queueBrushChange(p.x, p.y);
+        }
+
+        state.lastDragPoint = point;
       }
     });
 
     window.addEventListener("mouseup", () => {
       state.panning = false;
       state.drawing = false;
+      state.lastDragPoint = null;
       state.lastPaintKey = "";
       flushPaintBatch();
     });
