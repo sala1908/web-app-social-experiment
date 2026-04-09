@@ -55,9 +55,12 @@ This project is a social drawing experiment built as a full-stack web applicatio
 
    ```env
    POSTGRES_USER=postgres
-   POSTGRES_PASSWORD=pwd
-   POSTGRES_DB=users_db
-   SESSION_SECRET=super-duper-secret
+   POSTGRES_PASSWORD=postgres
+   POSTGRES_DB=web_e_vil
+   DB_HOST=db
+   DB_PORT=5432
+   PORT=3000
+   SESSION_SECRET=change-this-secret
    ```
 
 3. Start the application.
