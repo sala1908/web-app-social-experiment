@@ -12,3 +12,8 @@ Sami:
 ## Week 3 (v0.3)
 Sam: Improved UI for paint selection. Improved readability and updated readme. Updated daily limit counts to 100 instead of 50. This decision is arbitrary at this point will take some user sampling to determine a healthy number of 'free' pixels a day. 
 
+## Week 4 (v0.4)
+Sam: 
+- Added 'bulk paint' feature so drawing a line does not have trailing effect. 
+- Erasing, and double painting no longer decrement pixel count. 
+- Merged react feature with main branch. 
