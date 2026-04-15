@@ -46,6 +46,7 @@ router.post("/register", async (req, res) => {
     req.session.userId = rows[0].id;
     req.session.isAdmin = false;
     delete req.session.guestPaintsRemaining;
+    delete req.session.guestPaintUnitsSpent;
     return res.redirect("/");
   } catch (error) {
     if (error.code === "23505") {
@@ -64,6 +65,7 @@ router.post("/login", async (req, res) => {
     req.session.isAdmin = true;
     req.session.adminUsername = ADMIN_USERNAME;
     delete req.session.guestPaintsRemaining;
+    delete req.session.guestPaintUnitsSpent;
     return res.redirect("/");
   }
 
@@ -84,6 +86,7 @@ router.post("/login", async (req, res) => {
     req.session.isAdmin = false;
     req.session.adminUsername = null;
     delete req.session.guestPaintsRemaining;
+    delete req.session.guestPaintUnitsSpent;
     return res.redirect("/");
   } catch (error) {
     return res.status(500).render("login", { title: "Login", error: "Unable to login." });

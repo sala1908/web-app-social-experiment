@@ -103,6 +103,66 @@ describe("Paint API", function () {
     expect(rows[0].owner_tag).to.be.a("string");
   });
 
+  it("Positive: does not charge for same-color repaint or self erase", async function () {
+    this.timeout(5000);
+
+    const email = `quota_${Date.now()}@example.com`;
+    const username = `quota_${Date.now()}`;
+    const password = "validpass123";
+    const agent = chai.request.agent(globalServer);
+
+    await agent.post("/auth/register").type("form").send({ email, username, password });
+
+    const paintPayload = {
+      x: 220,
+      y: 220,
+      brushSize: 1,
+      mode: "paint",
+      color: "#FF0000"
+    };
+
+    const firstPaint = await agent.post("/api/paint").send(paintPayload);
+    expect(firstPaint).to.have.status(200);
+    expect(firstPaint.body.remainingPaints).to.equal(99);
+
+    const repeatPaint = await agent.post("/api/paint").send(paintPayload);
+    expect(repeatPaint).to.have.status(200);
+    expect(repeatPaint.body.remainingPaints).to.equal(99);
+
+    const eraseOwn = await agent.post("/api/paint").send({
+      x: 220,
+      y: 220,
+      brushSize: 1,
+      mode: "erase"
+    });
+
+    expect(eraseOwn).to.have.status(200);
+    expect(eraseOwn.body.remainingPaints).to.equal(99);
+  });
+
+  it("Positive: charges guest erases only on every other non-owned pixel", async function () {
+    this.timeout(5000);
+
+    const ownerEmail = `guest_owner_${Date.now()}@example.com`;
+    const ownerUsername = `guest_owner_${Date.now()}`;
+    const password = "validpass123";
+    const ownerAgent = chai.request.agent(globalServer);
+    const guestAgent = chai.request.agent(globalServer);
+
+    await ownerAgent.post("/auth/register").type("form").send({ email: ownerEmail, username: ownerUsername, password });
+
+    await ownerAgent.post("/api/paint").send({ x: 260, y: 260, brushSize: 1, mode: "paint", color: "#00FF00" });
+    await ownerAgent.post("/api/paint").send({ x: 261, y: 260, brushSize: 1, mode: "paint", color: "#00FF00" });
+
+    const firstErase = await guestAgent.post("/api/paint").send({ x: 260, y: 260, brushSize: 1, mode: "erase" });
+    expect(firstErase).to.have.status(200);
+    expect(firstErase.body.remainingPaints).to.equal(50);
+
+    const secondErase = await guestAgent.post("/api/paint").send({ x: 261, y: 260, brushSize: 1, mode: "erase" });
+    expect(secondErase).to.have.status(200);
+    expect(secondErase.body.remainingPaints).to.equal(49);
+  });
+
   it("Negative: rejects paint request with out-of-bounds coordinates", async function () {
     this.timeout(5000);
     

@@ -19,10 +19,10 @@ async function getAllowedColors(dbClient) {
   return new Set(rows.map((row) => row.color_hex.toUpperCase()));
 }
 
-async function getRemainingPaints(client, userId) {
+async function getPaintUnitsSpent(client, userId) {
   const { rows } = await client.query(
     `
-      SELECT COUNT(*)::int AS paints_today
+      SELECT COALESCE(SUM(cost_units), 0)::int AS paint_units_spent
       FROM paint_actions
       WHERE user_id = $1
         AND created_at >= (date_trunc('day', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC')
@@ -30,15 +30,29 @@ async function getRemainingPaints(client, userId) {
     [userId]
   );
 
-  return Math.max(0, DAILY_MAX_PAINTS - rows[0].paints_today);
+  return rows[0].paint_units_spent;
+}
+
+async function getRemainingPaints(client, userId) {
+  const paintUnitsSpent = await getPaintUnitsSpent(client, userId);
+
+  return Math.max(0, DAILY_MAX_PAINTS - Math.floor(paintUnitsSpent / 2));
+}
+
+function getGuestPaintUnitsSpent(session) {
+  if (typeof session.guestPaintUnitsSpent !== "number") {
+    if (typeof session.guestPaintsRemaining === "number") {
+      session.guestPaintUnitsSpent = Math.max(0, (GUEST_MAX_PAINTS - session.guestPaintsRemaining) * 2);
+    } else {
+      session.guestPaintUnitsSpent = 0;
+    }
+  }
+
+  return Math.max(0, session.guestPaintUnitsSpent);
 }
 
 function getGuestRemainingPaints(session) {
-  if (typeof session.guestPaintsRemaining !== "number") {
-    session.guestPaintsRemaining = GUEST_MAX_PAINTS;
-  }
-
-  return Math.max(0, session.guestPaintsRemaining);
+  return Math.max(0, GUEST_MAX_PAINTS - Math.floor(getGuestPaintUnitsSpent(session) / 2));
 }
 
 function normalizeDisplayName(value) {
@@ -459,18 +473,13 @@ router.post("/paint", async (req, res, next) => {
     await client.query("BEGIN");
 
     let remaining = null;
+    let spentUnits = 0;
     if (userId) {
-      remaining = await getRemainingPaints(client, userId);
-      if (remaining <= 0) {
-        await client.query("ROLLBACK");
-        return res.status(429).json({ error: "Daily paint limit reached.", dailyMaxPaints: DAILY_MAX_PAINTS, remainingPaints: 0 });
-      }
+      spentUnits = await getPaintUnitsSpent(client, userId);
+      remaining = Math.max(0, DAILY_MAX_PAINTS - Math.floor(spentUnits / 2));
     } else if (isGuest) {
-      remaining = getGuestRemainingPaints(req.session);
-      if (remaining <= 0) {
-        await client.query("ROLLBACK");
-        return res.status(429).json({ error: "Guest paint limit reached.", dailyMaxPaints: GUEST_MAX_PAINTS, remainingPaints: 0 });
-      }
+      spentUnits = getGuestPaintUnitsSpent(req.session);
+      remaining = Math.max(0, GUEST_MAX_PAINTS - Math.floor(spentUnits / 2));
     }
 
     const allowedColors = await getAllowedColors(client);
@@ -486,6 +495,7 @@ router.post("/paint", async (req, res, next) => {
         SELECT
           cp.x,
           cp.y,
+          cp.color_hex,
           cp.updated_by AS owner_id,
           CASE
             WHEN cp.owner_tag = '~Admin~' THEN 'Admin'
@@ -498,6 +508,7 @@ router.post("/paint", async (req, res, next) => {
       `
     );
     const protectedGroups = buildProtectedGroups(canvasRows);
+    const canvasByCell = new Map(canvasRows.map((row) => [`${row.x},${row.y}`, row]));
     const cells = buildBrushCells(x, y, brushSize);
     const blockedGroup = protectedGroups.find((group) => {
       if (!actorOwnershipKey || group.ownerKey === actorOwnershipKey) {
@@ -506,6 +517,29 @@ router.post("/paint", async (req, res, next) => {
 
       return cells.some((cell) => isPointInsideProtectedGroup(group, cell.x, cell.y));
     });
+
+    let costUnits = 0;
+    for (const cell of cells) {
+      const currentPixel = canvasByCell.get(`${cell.x},${cell.y}`);
+
+      if (mode === "paint") {
+        if (!currentPixel || String(currentPixel.color_hex || "").toUpperCase() !== color) {
+          costUnits += 2;
+        }
+        continue;
+      }
+
+      if (!currentPixel) {
+        continue;
+      }
+
+      const currentOwnershipKey = getOwnershipKey(currentPixel.owner_id, currentPixel.owner_tag, false);
+      if (currentOwnershipKey !== actorOwnershipKey) {
+        costUnits += 1;
+      }
+    }
+
+    const visibleCost = Math.floor((spentUnits + costUnits) / 2) - Math.floor(spentUnits / 2);
 
     if (blockedGroup) {
       await client.query("ROLLBACK");
@@ -520,10 +554,13 @@ router.post("/paint", async (req, res, next) => {
       });
     }
 
-    if (userId) {
-      await client.query("INSERT INTO paint_actions (user_id) VALUES ($1)", [userId]);
-    } else if (isGuest) {
-      req.session.guestPaintsRemaining = Math.max(0, remaining - 1);
+    if (remaining !== null && visibleCost > remaining) {
+      await client.query("ROLLBACK");
+      if (userId) {
+        return res.status(429).json({ error: "Daily paint limit reached.", dailyMaxPaints: DAILY_MAX_PAINTS, remainingPaints: 0 });
+      }
+
+      return res.status(429).json({ error: "Guest paint limit reached.", dailyMaxPaints: GUEST_MAX_PAINTS, remainingPaints: 0 });
     }
 
     const modifiedPixels = [];
@@ -562,6 +599,12 @@ router.post("/paint", async (req, res, next) => {
           owner_tag: ownerTag
         });
       }
+    }
+
+    if (userId && costUnits > 0) {
+      await client.query("INSERT INTO paint_actions (user_id, cost_units) VALUES ($1, $2)", [userId, costUnits]);
+    } else if (isGuest && costUnits > 0) {
+      req.session.guestPaintUnitsSpent = spentUnits + costUnits;
     }
 
     await client.query("COMMIT");
