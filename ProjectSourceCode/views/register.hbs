@@ -6,6 +6,10 @@
   {{#if error}}<p class="error">{{error}}</p>{{/if}}
   <form method="POST" action="/auth/register" class="auth-form">
     <label>
+      Username
+      <input type="text" name="username" minlength="3" maxlength="24" pattern="[a-zA-Z0-9_-]+" required />
+    </label>
+    <label>
       Email
       <input type="email" name="email" required />
     </label>

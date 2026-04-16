@@ -125,10 +125,23 @@ body {
   border-radius: 4px;
   border: 1px solid #00000030;
   cursor: pointer;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: bold;
+  color: white;
+  text-shadow: 0 0 2px #000;
 }
 
 .palette-swatch.active {
   outline: 2px solid #111;
+}
+
+.color-key {
+  display: inline-block;
+  pointer-events: none;
 }
 
 .canvas-shell {
@@ -137,6 +150,7 @@ body {
   border-radius: 12px;
   background: #ebe3d2;
   overflow: hidden;
+  position: relative;
 }
 
 #pixel-canvas {
@@ -144,6 +158,104 @@ body {
   height: 100%;
   display: block;
   touch-action: none;
+}
+
+.interaction-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(25, 19, 8, 0.38);
+  backdrop-filter: blur(2px);
+  z-index: 20;
+}
+
+.interaction-backdrop[hidden],
+.interaction-modal[hidden] {
+  display: none !important;
+}
+
+.interaction-modal {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  z-index: 21;
+}
+
+.interaction-card {
+  width: min(420px, calc(100vw - 24px));
+  border-radius: 18px;
+  border: 1px solid var(--line);
+  background: linear-gradient(180deg, #fffdf7 0%, #f7efde 100%);
+  box-shadow: 0 28px 64px rgba(40, 24, 4, 0.26);
+  padding: 18px;
+}
+
+.interaction-kicker {
+  margin: 0 0 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  font-size: 0.74rem;
+  color: #8b5e12;
+}
+
+.interaction-card h2 {
+  margin: 0;
+  font-size: 1.25rem;
+}
+
+.interaction-summary {
+  margin: 10px 0 14px;
+  color: #5e4d2e;
+}
+
+.interaction-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.interaction-actions button,
+.interaction-close {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: white;
+  padding: 10px 12px;
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.interaction-actions button {
+  background: linear-gradient(180deg, #fff 0%, #f4ead8 100%);
+}
+
+.interaction-actions button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.interaction-auth-links {
+  display: flex;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.interaction-auth-links[hidden] {
+  display: none !important;
+}
+
+.interaction-auth-links a {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: white;
+  color: var(--ink);
+  padding: 8px 12px;
+  text-decoration: none;
+  font-weight: 700;
+}
+
+.interaction-close {
+  margin-top: 12px;
+  width: 100%;
 }
 
 .status {
@@ -155,6 +267,10 @@ body {
 .usage {
   font-size: 0.9rem;
   color: #5e4d2e;
+}
+
+#pixel-count {
+  font-weight: 700;
 }
 
 .auth-page {

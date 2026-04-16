@@ -4,7 +4,7 @@
     <div class="auth-block">
       <a href="/" class="home-button">Home</a>
       {{#if isAuthenticated}}
-        <span class="user-email">{{user.email}}</span>
+        <span class="user-email">{{#if user.displayName}}{{user.displayName}}{{else}}{{user.email}}{{/if}}</span>
         <form method="POST" action="/auth/logout">
           <button type="submit">Logout</button>
         </form>
@@ -25,13 +25,6 @@
       <span id="brush-size-label">1</span>
     </label>
 
-    <label>
-      Active Color
-      <input id="active-color" type="color" value="#000000" />
-    </label>
-
-    <button type="button" id="add-color">Add Color</button>
-
     {{#if isAdmin}}
       <div class="admin-controls">
         <button type="button" id="admin-reset-canvas">Reset Canvas</button>
@@ -41,11 +34,37 @@
 
     <div id="palette" class="palette"></div>
 
+    <div id="pixel-count" class="usage"></div>
     <div id="usage" class="usage"></div>
   </section>
 
   <section class="canvas-shell">
     <canvas id="pixel-canvas"></canvas>
+  </section>
+
+  <div id="interaction-backdrop" class="interaction-backdrop" hidden></div>
+  <section id="interaction-modal" class="interaction-modal" aria-hidden="true" hidden>
+    <div class="interaction-card">
+      <p class="interaction-kicker">Protected space</p>
+      <h2 id="interaction-title">Interact with this label</h2>
+      <p id="interaction-summary" class="interaction-summary"></p>
+      <div class="interaction-actions">
+        <button type="button" data-interaction-type="like">Like</button>
+        <button type="button" data-interaction-type="dislike">Dislike</button>
+        <button type="button" data-interaction-type="report">Report</button>
+        <button type="button" data-interaction-type="love">Love</button>
+        <button type="button" data-interaction-type="remove">Remove</button>
+        <button type="button" data-interaction-type="ban">Ban</button>
+        <button type="button" data-interaction-type="friend">Add Friend</button>
+        <button type="button" data-interaction-type="name">Name</button>
+        <button type="button" data-interaction-type="visit-profile">Visit Profile</button>
+      </div>
+      <div id="interaction-auth-links" class="interaction-auth-links" hidden>
+        <a href="/login">Login</a>
+        <a href="/register">Register</a>
+      </div>
+      <button type="button" id="interaction-close" class="interaction-close">Close</button>
+    </div>
   </section>
 
   <p id="status" class="status"></p>

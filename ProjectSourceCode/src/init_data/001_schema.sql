@@ -30,15 +30,11 @@ CREATE TABLE IF NOT EXISTS canvas_pixels (
   y INTEGER NOT NULL,
   color_hex TEXT NOT NULL,
   updated_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
-  owner_tag TEXT,
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   PRIMARY KEY (x, y),
   CHECK (x >= 0 AND y >= 0),
   CHECK (color_hex ~* '^#[0-9A-F]{6}$')
 );
-
-ALTER TABLE canvas_pixels
-  ADD COLUMN IF NOT EXISTS owner_tag TEXT;
 
 CREATE TABLE IF NOT EXISTS user_bans (
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,

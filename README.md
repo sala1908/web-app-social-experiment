@@ -1,74 +1,105 @@
 # Web-E-Vil
 
-A collaborative pixel art canvas inspired by Reddit's r/place. Users join a shared digital canvas and place colored pixels to contribute to a collective piece of art.
+Web-E-Vil is a collaborative pixel art canvas inspired by Reddit's r/place. The application lets authenticated users contribute pixels to a shared board in real time, while preserving edit history and enforcing per-user limits.
 
-## Current MVP Features
+## Overview
+
+This project is a social drawing experiment built as a full-stack web application. It combines real-time collaboration, session-based authentication, and persistent state backed by PostgreSQL.
+
+## Features
+
 - Shared 1024x1024 pixel canvas
-- Real-time updates across connected clients
-- Pan and zoom controls on the canvas
-- Paint and erase tools
-- Brush sizes from 1 to 5
-- Email/password authentication
-- Login-required painting and erasing
-- Per-user custom color palettes (plus default shared colors)
+- Real-time canvas updates across connected clients
+- Pan and zoom controls for navigation
+- Paint and erase tools with brush sizes from 1 to 5
+- Email and password authentication
+- Login required for painting and erasing
+- Per-user custom color palettes plus default shared colors
 - Daily paint limit of 50 actions per user
-- Full pixel edit history persisted in PostgreSQL
-
-## Contributors
-- Sami Yohannes (sayo4369)
-- Samuel Lauer (sala1908)
-- Denys Davydenko (s-ddavydenko)
+- Full pixel edit history stored in PostgreSQL
 
 ## Technology Stack
-- **Frontend:** Handlebars (HBS), CSS, JavaScript
-- **Backend:** Node.js, Express.js
-- **Database:** PostgreSQL
-- **Containerization:** Docker
+
+| Layer | Technology |
+| --- | --- |
+| Frontend | Handlebars 8.0.1, JavaScript, CSS |
+| Backend | Node.js 20, Express 4.21.2 |
+| Real-time | Socket.IO 4.8.1 |
+| Authentication | express-session 1.18.1, bcryptjs 2.4.3, connect-pg-simple 10.0.0 |
+| Database | PostgreSQL 16 |
+| Security and logging | helmet 8.1.0, morgan 1.10.0 |
+| Configuration | dotenv 16.4.5 |
+| Containerization | Docker, Docker Compose |
+
+## Repository Structure
+
+- [ProjectSourceCode/](ProjectSourceCode/) contains the application source code, Docker files, and views
+- [MilestoneSubmissions/](MilestoneSubmissions/) contains milestone planning and release notes
+- [TeamMeetingLogs/](TeamMeetingLogs/) contains meeting notes
 
 ## Prerequisites
-- Docker Desktop installed
-- Node.js (LTS version)
+
+- Docker Desktop
 - Git
 
-## How to Run Locally
-1. Clone the repository:
+## Local Setup
+
+1. Clone the repository.
+
+   ```bash
    git clone https://github.com/sala1908/web-app-social-experiment.git
-
-2. Navigate to the source code folder:
    cd web-app-social-experiment/ProjectSourceCode
+   ```
 
-3. Ensure the root `.env` file exists at `web-app-social-experiment/.env` with:
+2. Create a root `.env` file at `web-app-social-experiment/.env` with the required database and session values.
+
+   ```env
    POSTGRES_USER=postgres
-   POSTGRES_PASSWORD=pwd
-   POSTGRES_DB=users_db
-   SESSION_SECRET=super-duper-secret
+   POSTGRES_PASSWORD=postgres
+   POSTGRES_DB=web_e_vil
+   DB_HOST=db
+   DB_PORT=5432
+   PORT=3000
+   SESSION_SECRET=change-this-secret
+   ```
 
-4. Start the application:
-   docker compose -f docker_compose.yaml up --build
+3. Start the application.
 
-5. Open your browser and go to:
+   ```bash
+   docker compose -f docker-compose.yaml up --build
+   ```
+
+4. Open the app in your browser.
+
+   ```text
    http://localhost:3000
+   ```
 
-## How to Run Tests
-1. Navigate to the ProjectSourceCode folder:
-   cd ProjectSourceCode
+## Verification
 
-2. Run the app stack for manual verification:
-   docker compose -f docker_compose.yaml up --build
+The project does not currently include an automated test suite. For manual verification, run the application and confirm the following:
 
-3. Manual smoke checks:
-   - Register two users in two browser sessions
-   - Verify both sessions see real-time pixel updates
-   - Verify painting is rejected when not logged in
-   - Verify per-user palette additions work
-   - Verify the 51st paint in one day is rejected
+- Two browser sessions can register and log in successfully
+- Real-time pixel updates appear in both sessions
+- Anonymous users cannot paint or erase
+- Palette updates are persisted per user
+- The 51st paint action in a day is rejected
 
-## Deployed Application
-Link coming soon
+## Runtime Scripts
 
-# Project-014-3
-Repository for team 014-3's Software Development Methods and Tools Project
-# Authors:
-Samuel Lauer, Denys ..., Mac, Sami
-# Summary: 
-This application is intended to provide a social experiment experience to the users. With inspiration from projects like r/place, we aim to create an interactive enviornment where users can compare their scores with others, and compete. 
+The application scripts defined in `ProjectSourceCode/package.json` are:
+
+- `npm start` to run the production server
+- `npm run dev` to run the server with nodemon
+- `npm run init-db` to initialize the database schema
+
+## Contributors
+
+- Sami Yohannes
+- Samuel Lauer
+- Denys Davydenko
+- Macallan Finigan
+
+## Project Context
+
+This repository was developed as part of a Software Development Methods and Tools project focused on building a real-time social collaboration experience.

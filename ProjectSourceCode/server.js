@@ -6,7 +6,7 @@ const { initDb } = require("./src/db/initDb");
 
 const PORT = Number(process.env.PORT || 3000);
 
-async function bootstrap() {
+async function startServer(port = PORT) {
   await initDb();
 
   const app = createApp();
@@ -16,12 +16,22 @@ async function bootstrap() {
   initSockets(io);
   app.set("io", io);
 
-  server.listen(PORT, () => {
-    console.log(`Server listening on port ${PORT}`);
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(port, () => {
+      console.log(`Server listening on port ${port}`);
+      resolve();
+    });
+  });
+
+  return { app, server, io };
+}
+
+if (require.main === module) {
+  startServer().catch((error) => {
+    console.error("Failed to start server", error);
+    process.exit(1);
   });
 }
 
-bootstrap().catch((error) => {
-  console.error("Failed to start server", error);
-  process.exit(1);
-});
+module.exports = { startServer };
