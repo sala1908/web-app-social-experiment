@@ -20,7 +20,6 @@
   const isAdmin = Boolean(window.APP_IS_ADMIN);
   const ctx = canvas.getContext("2d");
   const pixels = new Map();
-  
 
   const state = {
     mode: "paint",
@@ -59,7 +58,9 @@
     }
 
     if (!authenticated) {
-      usageEl.textContent = "Guest mode: painting enabled.";
+      usageEl.textContent = typeof state.remainingPaints === "number"
+        ? `Pixels left today: ${state.remainingPaints}`
+        : "Guest mode: painting enabled.";
       return;
     }
 
@@ -68,16 +69,20 @@
     }
   }
 
-  function batchKeyFor(x, y) {
+  function keyFor(x, y) {
     return `${x},${y}`;
   }
 
-  function setPixel(x, y, color) {
-    const key = batchKeyFor(x, y);
+  function setPixel(x, y, color, ownerId = null, ownerTag = null) {
+    const key = keyFor(x, y);
     if (!color) {
       pixels.delete(key);
     } else {
-      pixels.set(key, color);
+      pixels.set(key, {
+        color,
+        ownerId,
+        ownerTag
+      });
     }
   }
 
@@ -85,13 +90,19 @@
     if (pixel.mode === "erase") {
       setPixel(pixel.x, pixel.y, null);
     } else {
-      setPixel(pixel.x, pixel.y, pixel.color);
+      setPixel(pixel.x, pixel.y, pixel.color, pixel.ownerId ?? null, pixel.ownerTag ?? null);
     }
   }
 
   function applyModifiedPixels(modifiedPixels) {
     modifiedPixels.forEach((pixel) => {
-      setPixel(pixel.x, pixel.y, pixel.color_hex);
+      setPixel(
+        pixel.x,
+        pixel.y,
+        pixel.color_hex,
+        pixel.owner_id ?? null,
+        pixel.owner_tag ?? null
+      );
     });
 
     reapplyPendingPixels();
@@ -104,10 +115,20 @@
     }
   }
 
+  function getLocalOwnerTag() {
+    if (isAdmin) {
+      return "Admin";
+    }
+
+    if (authenticated) {
+      return "You";
+    }
+
+    return "Guest";
+  }
+
   function queueBrushChange(x, y) {
     const offset = -Math.floor((state.brushSize - 1) / 2);
-
-
 
     for (let row = 0; row < state.brushSize; row += 1) {
       for (let col = 0; col < state.brushSize; col += 1) {
@@ -125,12 +146,14 @@
       return;
     }
 
-    const key = batchKeyFor(x, y);
+    const key = keyFor(x, y);
     const queuedPixel = {
       x,
       y,
       mode: state.mode,
-      color: state.activeColor
+      color: state.activeColor,
+      ownerId: null,
+      ownerTag: getLocalOwnerTag()
     };
 
     pendingPixels.set(key, queuedPixel);
@@ -175,10 +198,11 @@
     inflightPixels = pendingPixels;
     pendingPixels = new Map();
 
-    const points = Array.from(inflightPixels.values()).map(p => ({
+    const points = Array.from(inflightPixels.values()).map((p) => ({
       x: p.x,
       y: p.y
     }));
+
     batchRequestInFlight = true;
 
     try {
@@ -197,17 +221,19 @@
 
       if (!response.ok) {
         setStatus(payload.error || "Paint batch failed.", true);
+        await loadCanvas();
+        inflightPixels = new Map();
         return;
       }
 
       state.remainingPaints = payload.remainingPaints;
       applyModifiedPixels(payload.modifiedPixels);
       updateUsage();
-
       inflightPixels = new Map();
-
     } catch {
       setStatus("Paint batch failed.", true);
+      await loadCanvas();
+      inflightPixels = new Map();
     } finally {
       batchRequestInFlight = false;
 
@@ -221,6 +247,7 @@
     const rect = canvas.getBoundingClientRect();
     const x = (clientX - rect.left - state.offsetX) / state.scale;
     const y = (clientY - rect.top - state.offsetY) / state.scale;
+
     return {
       x: Math.floor(x),
       y: Math.floor(y)
@@ -228,41 +255,41 @@
   }
 
   function getLinePoints(startX, startY, endX, endY) {
-  const points = [];
+    const points = [];
 
-  let x = startX;
-  let y = startY;
+    let x = startX;
+    let y = startY;
 
-  const dx = Math.abs(endX - startX);
-  const dy = Math.abs(endY - startY);
+    const dx = Math.abs(endX - startX);
+    const dy = Math.abs(endY - startY);
 
-  const sx = startX < endX ? 1 : -1;
-  const sy = startY < endY ? 1 : -1;
+    const sx = startX < endX ? 1 : -1;
+    const sy = startY < endY ? 1 : -1;
 
-  let err = dx - dy;
+    let err = dx - dy;
 
-  while (true) {
-    points.push({ x, y });
+    while (true) {
+      points.push({ x, y });
 
-    if (x === endX && y === endY) {
-      break;
+      if (x === endX && y === endY) {
+        break;
+      }
+
+      const e2 = err * 2;
+
+      if (e2 > -dy) {
+        err -= dy;
+        x += sx;
+      }
+
+      if (e2 < dx) {
+        err += dx;
+        y += sy;
+      }
     }
 
-    const e2 = err * 2;
-
-    if (e2 > -dy) {
-      err -= dy;
-      x += sx;
-    }
-
-    if (e2 < dx) {
-      err += dx;
-      y += sy;
-    }
+    return points;
   }
-
-  return points;
-}
 
   function resizeCanvas() {
     const dpr = window.devicePixelRatio || 1;
@@ -291,9 +318,9 @@
     ctx.fillStyle = "#ffffff";
     ctx.fillRect(0, 0, cfg.gridSize, cfg.gridSize);
 
-    for (const [xy, color] of pixels.entries()) {
+    for (const [xy, pixel] of pixels.entries()) {
       const [x, y] = xy.split(",").map(Number);
-      ctx.fillStyle = color;
+      ctx.fillStyle = pixel.color;
       ctx.fillRect(x, y, 1, 1);
     }
 
@@ -323,7 +350,13 @@
 
     pixels.clear();
     payload.pixels.forEach((pixel) => {
-      setPixel(pixel.x, pixel.y, pixel.color_hex);
+      setPixel(
+        pixel.x,
+        pixel.y,
+        pixel.color_hex,
+        pixel.owner_id ?? null,
+        pixel.owner_tag ?? null
+      );
     });
 
     draw();
@@ -337,6 +370,11 @@
 
     const payload = await response.json();
     state.palette = payload.palette;
+
+    if (state.palette.length > 0 && !state.palette.some((entry) => entry.color_hex.toUpperCase() === state.activeColor.toUpperCase())) {
+      state.activeColor = state.palette[0].color_hex.toUpperCase();
+    }
+
     renderPalette();
   }
 
@@ -357,26 +395,38 @@
       const swatch = document.createElement("button");
       swatch.type = "button";
       swatch.className = "palette-swatch";
+
       if (entry.color_hex.toUpperCase() === state.activeColor.toUpperCase()) {
         swatch.classList.add("active");
       }
+
       swatch.style.backgroundColor = entry.color_hex;
       swatch.title = `${entry.color_hex} (${entry.scope})`;
+
       swatch.addEventListener("click", () => {
-        state.activeColor = entry.color_hex;
-        activeColorInput.value = entry.color_hex;
+        state.activeColor = entry.color_hex.toUpperCase();
+        if (activeColorInput) {
+          activeColorInput.value = entry.color_hex;
+        }
         renderPalette();
       });
+
       paletteEl.appendChild(swatch);
     });
+
+    if (activeColorInput) {
+      activeColorInput.value = state.activeColor;
+    }
   }
 
   function connectSocket() {
     socket = window.io();
+
     socket.on("paint_applied", (event) => {
       if (!event || !Array.isArray(event.modifiedPixels)) {
         return;
       }
+
       applyModifiedPixels(event.modifiedPixels);
     });
 
@@ -393,6 +443,7 @@
 
     canvas.addEventListener("wheel", (event) => {
       event.preventDefault();
+
       const rect = canvas.getBoundingClientRect();
       const mx = event.clientX - rect.left;
       const my = event.clientY - rect.top;
@@ -410,6 +461,7 @@
 
     canvas.addEventListener("mousedown", (event) => {
       flushBeforeToolChange();
+
       if (event.button === 2) {
         state.panning = true;
         state.panStartX = event.clientX - state.offsetX;
@@ -467,8 +519,7 @@
 
     toolbar.querySelectorAll("[data-mode]").forEach((button) => {
       button.addEventListener("click", () => {
-        flushBeforeToolChange(); // 
-
+        flushBeforeToolChange();
         state.mode = button.getAttribute("data-mode");
         toolbar.querySelectorAll("[data-mode]").forEach((btn) => btn.classList.remove("active"));
         button.classList.add("active");
@@ -476,40 +527,24 @@
     });
 
     brushInput.addEventListener("input", () => {
-      flushBeforeToolChange(); // 
-
+      flushBeforeToolChange();
       state.brushSize = Number(brushInput.value);
       brushLabel.textContent = String(state.brushSize);
     });
 
-    activeColorInput.addEventListener("input", () => {
-      flushBeforeToolChange(); // 
-
-      state.activeColor = activeColorInput.value.toUpperCase();
-      renderPalette();
-    });
-
-    addColorBtn.addEventListener("click", async () => {
-      if (!authenticated) {
-        setStatus("Login required to change palette.", true);
-        return;
-      }
-
-      const response = await fetch("/api/palette", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ color: state.activeColor })
+    if (activeColorInput) {
+      activeColorInput.addEventListener("input", () => {
+        flushBeforeToolChange();
+        state.activeColor = activeColorInput.value.toUpperCase();
+        renderPalette();
       });
+    }
 
-      if (!response.ok) {
-        const payload = await response.json();
-        setStatus(payload.error || "Unable to add color.", true);
-        return;
-      }
-
-      await loadPalette();
-      setStatus("Color added to your palette.");
-    });
+    if (addColorBtn) {
+      addColorBtn.addEventListener("click", async () => {
+        setStatus("Custom colors are disabled. Choose from swatches.", true);
+      });
+    }
 
     if (adminResetCanvasBtn) {
       adminResetCanvasBtn.addEventListener("click", async () => {
@@ -552,12 +587,8 @@
     bindEvents();
     resizeCanvas();
     await loadCanvas();
-
-    if (authenticated) {
-      await loadPalette();
-      await loadLimits();
-    }
-
+    await loadPalette();
+    await loadLimits();
     connectSocket();
     updateUsage();
   }
