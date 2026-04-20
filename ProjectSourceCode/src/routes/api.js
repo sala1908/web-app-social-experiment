@@ -34,6 +34,10 @@ async function getRemainingPaints(client, userId) {
 }
 
 function getGuestRemainingPaints(session) {
+  if (!session) {
+    return GUEST_MAX_PAINTS;
+  }
+
   if (typeof session.guestPaintsRemaining !== "number") {
     session.guestPaintsRemaining = GUEST_MAX_PAINTS;
   }
@@ -72,6 +76,22 @@ function buildBrushCells(x, y, brushSize) {
   return cells;
 }
 
+function uniqueCells(cells) {
+  const seen = new Set();
+  const result = [];
+
+  for (const cell of cells) {
+    const key = `${cell.x},${cell.y}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    result.push(cell);
+  }
+
+  return result;
+}
+
 function getOwnershipKey(ownerId, ownerTag, isAdmin) {
   const displayName = String(ownerTag || "").trim().toLowerCase();
   if (isAdmin || displayName === "admin" || displayName === "~admin~") {
@@ -87,6 +107,12 @@ function getOwnershipKey(ownerId, ownerTag, isAdmin) {
   }
 
   return null;
+}
+
+function isPointInsideProtectedGroup(group, x, y) {
+  const dx = x + 0.5 - group.centerX;
+  const dy = y + 0.5 - group.centerY;
+  return (dx * dx) + (dy * dy) <= group.radius * group.radius;
 }
 
 function buildProtectedGroups(rows) {
@@ -308,31 +334,31 @@ async function getBubbleTitleForGroup(dbClient, group) {
   return rows[0] ? rows[0].title : null;
 }
 
-function isPointInsideProtectedGroup(group, x, y) {
-  const dx = x + 0.5 - group.centerX;
-  const dy = y + 0.5 - group.centerY;
-  return (dx * dx) + (dy * dy) <= group.radius * group.radius;
+async function fetchCanvasOwnershipRows(dbClient) {
+  const { rows } = await dbClient.query(
+    `
+      SELECT
+        cp.x,
+        cp.y,
+        cp.color_hex,
+        cp.updated_by AS owner_id,
+        CASE
+          WHEN cp.owner_tag = '~Admin~' THEN 'Admin'
+          WHEN cp.owner_tag = 'Admin' THEN 'Admin'
+          WHEN cp.updated_by IS NOT NULL THEN COALESCE(NULLIF(u.username, ''), SPLIT_PART(u.email, '@', 1), cp.owner_tag)
+          ELSE COALESCE(NULLIF(cp.owner_tag, ''), 'Guest')
+        END AS owner_tag
+      FROM canvas_pixels cp
+      LEFT JOIN users u ON u.id = cp.updated_by
+    `
+  );
+
+  return rows;
 }
 
 router.get("/canvas", async (req, res, next) => {
   try {
-    const { rows } = await pool.query(
-      `
-        SELECT
-          cp.x,
-          cp.y,
-          cp.color_hex,
-          cp.updated_by AS owner_id,
-          CASE
-            WHEN cp.owner_tag = '~Admin~' THEN 'Admin'
-            WHEN cp.owner_tag = 'Admin' THEN 'Admin'
-            WHEN cp.updated_by IS NOT NULL THEN COALESCE(NULLIF(u.username, ''), SPLIT_PART(u.email, '@', 1), cp.owner_tag)
-            ELSE COALESCE(NULLIF(cp.owner_tag, ''), 'Guest')
-          END AS owner_tag
-        FROM canvas_pixels cp
-        LEFT JOIN users u ON u.id = cp.updated_by
-      `
-    );
+    const rows = await fetchCanvasOwnershipRows(pool);
     return res.json({ gridSize: GRID_SIZE, pixels: rows });
   } catch (error) {
     return next(error);
@@ -355,7 +381,7 @@ router.get("/welcome", (req, res) => {
   return res.json({ status: "success", message: "Welcome!" });
 });
 
-router.get("/me/limits", requireAuth, async (req, res, next) => {
+router.get("/me/limits", async (req, res, next) => {
   if (req.session && req.session.isAdmin) {
     return res.json({ dailyMaxPaints: null, remainingPaints: null, unlimited: true });
   }
@@ -377,34 +403,6 @@ router.get("/me/limits", requireAuth, async (req, res, next) => {
 });
 
 router.get("/palette", async (req, res, next) => {
-  if (req.session && req.session.isAdmin) {
-    try {
-      const { rows } = await pool.query(
-        `
-          SELECT color_hex, 'default' AS scope FROM default_palette
-          ORDER BY color_hex ASC
-        `
-      );
-      return res.json({ palette: rows });
-    } catch (error) {
-      return next(error);
-    }
-  }
-
-  if (!req.session || !req.session.userId) {
-    try {
-      const { rows } = await pool.query(
-        `
-          SELECT color_hex, 'default' AS scope FROM default_palette
-          ORDER BY color_hex ASC
-        `
-      );
-      return res.json({ palette: rows, guest: true });
-    } catch (error) {
-      return next(error);
-    }
-  }
-
   try {
     const { rows } = await pool.query(
       `
@@ -413,7 +411,10 @@ router.get("/palette", async (req, res, next) => {
       `
     );
 
-    return res.json({ palette: rows });
+    return res.json({
+      palette: rows,
+      guest: !(req.session && req.session.userId) && !(req.session && req.session.isAdmin)
+    });
   } catch (error) {
     return next(error);
   }
@@ -447,13 +448,15 @@ router.post("/paint", async (req, res, next) => {
   }
 
   const userId = req.session && req.session.userId ? req.session.userId : null;
-  const ownerTag = req.session && req.session.isAdmin
+  const isAdmin = Boolean(req.session && req.session.isAdmin);
+  const ownerTag = isAdmin
     ? "Admin"
     : req.user && req.user.email
       ? normalizeDisplayName(req.user.displayName || req.user.username || req.user.email.split("@")[0])
       : "Guest";
-  const isGuest = !userId && !(req.session && req.session.isAdmin);
-  const actorOwnershipKey = getOwnershipKey(userId, ownerTag, Boolean(req.session && req.session.isAdmin));
+  const isGuest = !userId && !isAdmin;
+  const actorOwnershipKey = getOwnershipKey(userId, ownerTag, isAdmin);
+
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
@@ -463,13 +466,21 @@ router.post("/paint", async (req, res, next) => {
       remaining = await getRemainingPaints(client, userId);
       if (remaining <= 0) {
         await client.query("ROLLBACK");
-        return res.status(429).json({ error: "Daily paint limit reached.", dailyMaxPaints: DAILY_MAX_PAINTS, remainingPaints: 0 });
+        return res.status(429).json({
+          error: "Daily paint limit reached.",
+          dailyMaxPaints: DAILY_MAX_PAINTS,
+          remainingPaints: 0
+        });
       }
     } else if (isGuest) {
       remaining = getGuestRemainingPaints(req.session);
       if (remaining <= 0) {
         await client.query("ROLLBACK");
-        return res.status(429).json({ error: "Guest paint limit reached.", dailyMaxPaints: GUEST_MAX_PAINTS, remainingPaints: 0 });
+        return res.status(429).json({
+          error: "Guest paint limit reached.",
+          dailyMaxPaints: GUEST_MAX_PAINTS,
+          remainingPaints: 0
+        });
       }
     }
 
@@ -481,22 +492,7 @@ router.post("/paint", async (req, res, next) => {
       return res.status(403).json({ error: "Color is not in your allowed palette." });
     }
 
-    const { rows: canvasRows } = await client.query(
-      `
-        SELECT
-          cp.x,
-          cp.y,
-          cp.updated_by AS owner_id,
-          CASE
-            WHEN cp.owner_tag = '~Admin~' THEN 'Admin'
-            WHEN cp.owner_tag = 'Admin' THEN 'Admin'
-            WHEN cp.updated_by IS NOT NULL THEN COALESCE(NULLIF(u.username, ''), SPLIT_PART(u.email, '@', 1), cp.owner_tag)
-            ELSE COALESCE(NULLIF(cp.owner_tag, ''), 'Guest')
-          END AS owner_tag
-        FROM canvas_pixels cp
-        LEFT JOIN users u ON u.id = cp.updated_by
-      `
-    );
+    const canvasRows = await fetchCanvasOwnershipRows(client);
     const protectedGroups = buildProtectedGroups(canvasRows);
     const cells = buildBrushCells(x, y, brushSize);
     const blockedGroup = protectedGroups.find((group) => {
@@ -522,7 +518,7 @@ router.post("/paint", async (req, res, next) => {
 
     if (userId) {
       await client.query("INSERT INTO paint_actions (user_id) VALUES ($1)", [userId]);
-    } else if (isGuest) {
+    } else if (isGuest && req.session) {
       req.session.guestPaintsRemaining = Math.max(0, remaining - 1);
     }
 
@@ -537,7 +533,13 @@ router.post("/paint", async (req, res, next) => {
             [userId, cell.x, cell.y, brushSize]
           );
         }
-        modifiedPixels.push({ x: cell.x, y: cell.y, color_hex: null, owner_id: null, owner_tag: null });
+        modifiedPixels.push({
+          x: cell.x,
+          y: cell.y,
+          color_hex: null,
+          owner_id: null,
+          owner_tag: null
+        });
       } else {
         await client.query(
           `
@@ -590,6 +592,198 @@ router.post("/paint", async (req, res, next) => {
   }
 });
 
+router.post("/paint-batch", async (req, res, next) => {
+  const points = Array.isArray(req.body.points) ? req.body.points : [];
+  const brushSize = Number(req.body.brushSize || 1);
+  const mode = req.body.mode === "erase" ? "erase" : "paint";
+  const rawColor = String(req.body.color || "").toUpperCase();
+
+  if (points.length === 0) {
+    return res.status(400).json({ error: "At least one point is required." });
+  }
+
+  if (points.length > 500) {
+    return res.status(400).json({ error: "Batch too large." });
+  }
+
+  if (!Number.isInteger(brushSize) || brushSize < 1 || brushSize > MAX_BRUSH_SIZE) {
+    return res.status(400).json({ error: `Brush size must be between 1 and ${MAX_BRUSH_SIZE}.` });
+  }
+
+  if (mode === "paint" && !isHexColor(rawColor)) {
+    return res.status(400).json({ error: "Paint mode requires a valid hex color." });
+  }
+
+  const normalizedPoints = [];
+  for (const point of points) {
+    const x = Number(point.x);
+    const y = Number(point.y);
+
+    if (!Number.isInteger(x) || !Number.isInteger(y) || x < 0 || y < 0 || x >= GRID_SIZE || y >= GRID_SIZE) {
+      return res.status(400).json({ error: "One or more coordinates are out of bounds." });
+    }
+
+    normalizedPoints.push({ x, y });
+  }
+
+  const userId = req.session && req.session.userId ? req.session.userId : null;
+  const isAdmin = Boolean(req.session && req.session.isAdmin);
+  const ownerTag = isAdmin
+    ? "Admin"
+    : req.user && req.user.email
+      ? normalizeDisplayName(req.user.displayName || req.user.username || req.user.email.split("@")[0])
+      : "Guest";
+  const isGuest = !userId && !isAdmin;
+  const actorOwnershipKey = getOwnershipKey(userId, ownerTag, isAdmin);
+
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+
+    let remaining = null;
+    if (userId) {
+      remaining = await getRemainingPaints(client, userId);
+      if (remaining <= 0) {
+        await client.query("ROLLBACK");
+        return res.status(429).json({
+          error: "Daily paint limit reached.",
+          dailyMaxPaints: DAILY_MAX_PAINTS,
+          remainingPaints: 0
+        });
+      }
+    } else if (isGuest) {
+      remaining = getGuestRemainingPaints(req.session);
+      if (remaining <= 0) {
+        await client.query("ROLLBACK");
+        return res.status(429).json({
+          error: "Guest paint limit reached.",
+          dailyMaxPaints: GUEST_MAX_PAINTS,
+          remainingPaints: 0
+        });
+      }
+    }
+
+    const allowedColors = await getAllowedColors(client);
+    const color = rawColor.toUpperCase();
+
+    if (mode === "paint" && !allowedColors.has(color)) {
+      await client.query("ROLLBACK");
+      return res.status(403).json({ error: "Color is not in your allowed palette." });
+    }
+
+    const canvasRows = await fetchCanvasOwnershipRows(client);
+    const protectedGroups = buildProtectedGroups(canvasRows);
+
+    let expandedCells = [];
+    for (const point of normalizedPoints) {
+      expandedCells.push(...buildBrushCells(point.x, point.y, brushSize));
+    }
+
+    expandedCells = uniqueCells(expandedCells);
+
+    const blockedGroup = protectedGroups.find((group) => {
+      if (!actorOwnershipKey || group.ownerKey === actorOwnershipKey) {
+        return false;
+      }
+
+      return expandedCells.some((cell) => isPointInsideProtectedGroup(group, cell.x, cell.y));
+    });
+
+    if (blockedGroup) {
+      await client.query("ROLLBACK");
+      return res.status(403).json({
+        error: `Protected space around ${blockedGroup.tag} is locked. Click the label to interact instead.`,
+        protectedGroup: {
+          ownerId: blockedGroup.ownerId,
+          tag: blockedGroup.tag,
+          x: blockedGroup.x,
+          y: blockedGroup.y
+        }
+      });
+    }
+
+    if (userId) {
+      await client.query("INSERT INTO paint_actions (user_id) VALUES ($1)", [userId]);
+    } else if (isGuest && req.session) {
+      req.session.guestPaintsRemaining = Math.max(0, remaining - 1);
+    }
+
+    const modifiedPixels = [];
+
+    for (const cell of expandedCells) {
+      if (mode === "erase") {
+        await client.query("DELETE FROM canvas_pixels WHERE x = $1 AND y = $2", [cell.x, cell.y]);
+
+        if (userId) {
+          await client.query(
+            "INSERT INTO pixel_history (user_id, x, y, color_hex, action, brush_size) VALUES ($1, $2, $3, NULL, 'erase', $4)",
+            [userId, cell.x, cell.y, brushSize]
+          );
+        }
+
+        modifiedPixels.push({
+          x: cell.x,
+          y: cell.y,
+          color_hex: null,
+          owner_id: null,
+          owner_tag: null
+        });
+      } else {
+        await client.query(
+          `
+            INSERT INTO canvas_pixels (x, y, color_hex, updated_by, owner_tag)
+            VALUES ($1, $2, $3, $4, $5)
+            ON CONFLICT (x, y)
+            DO UPDATE SET color_hex = EXCLUDED.color_hex, updated_by = EXCLUDED.updated_by, owner_tag = EXCLUDED.owner_tag, updated_at = NOW()
+          `,
+          [cell.x, cell.y, color, userId, ownerTag]
+        );
+
+        if (userId) {
+          await client.query(
+            "INSERT INTO pixel_history (user_id, x, y, color_hex, action, brush_size) VALUES ($1, $2, $3, $4, 'paint', $5)",
+            [userId, cell.x, cell.y, color, brushSize]
+          );
+        }
+
+        modifiedPixels.push({
+          x: cell.x,
+          y: cell.y,
+          color_hex: color,
+          owner_id: userId,
+          owner_tag: ownerTag
+        });
+      }
+    }
+
+    await client.query("COMMIT");
+
+    const nextRemaining = typeof remaining === "number" ? Math.max(0, remaining - 1) : null;
+
+    const io = req.app.get("io");
+    if (io) {
+      io.emit("paint_applied", {
+        mode,
+        brushSize,
+        userId,
+        modifiedPixels
+      });
+    }
+
+    return res.json({
+      ok: true,
+      remainingPaints: nextRemaining,
+      modifiedPixels
+    });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    return next(error);
+  } finally {
+    client.release();
+  }
+});
+
 router.get("/interactions/context", async (req, res, next) => {
   const targetUserId = Number(req.query.targetUserId);
   const targetOwnerTag = String(req.query.targetOwnerTag || "").trim();
@@ -615,23 +809,7 @@ router.get("/interactions/context", async (req, res, next) => {
 
     let bubbleTitle = null;
     if (Number.isInteger(targetGroupX) && Number.isInteger(targetGroupY) && targetGroupX >= 0 && targetGroupY >= 0) {
-      const { rows: canvasRows } = await pool.query(
-        `
-          SELECT
-            cp.x,
-            cp.y,
-            cp.updated_by AS owner_id,
-            CASE
-              WHEN cp.owner_tag = '~Admin~' THEN 'Admin'
-              WHEN cp.owner_tag = 'Admin' THEN 'Admin'
-              WHEN cp.updated_by IS NOT NULL THEN COALESCE(NULLIF(u.username, ''), SPLIT_PART(u.email, '@', 1), cp.owner_tag)
-              ELSE COALESCE(NULLIF(cp.owner_tag, ''), 'Guest')
-            END AS owner_tag
-          FROM canvas_pixels cp
-          LEFT JOIN users u ON u.id = cp.updated_by
-        `
-      );
-
+      const canvasRows = await fetchCanvasOwnershipRows(pool);
       const groups = buildProtectedGroups(canvasRows);
       const targetGroup = resolveTargetGroup(groups, targetGroupX, targetGroupY, targetOwnerTag);
       if (targetGroup) {
@@ -679,7 +857,11 @@ router.post("/interactions", requireAuth, async (req, res, next) => {
     : ["like", "dislike", "report", "friend"].concat(isOwnTarget ? ["remove", "name"] : []);
 
   if (!allowedTypes.includes(interactionType)) {
-    return res.status(400).json({ error: actorIsAdmin ? "Admins can only use love/remove/ban/name." : "Users can only use like/dislike/report/add friend, plus remove/name on their own bubble." });
+    return res.status(400).json({
+      error: actorIsAdmin
+        ? "Admins can only use love/remove/ban/name."
+        : "Users can only use like/dislike/report/add friend, plus remove/name on their own bubble."
+    });
   }
 
   if (interactionType === "friend" && targetUserId === null) {
@@ -724,23 +906,7 @@ router.post("/interactions", requireAuth, async (req, res, next) => {
 
     let targetGroup = null;
     if (interactionType === "remove" || interactionType === "ban" || interactionType === "name") {
-      const { rows: canvasRows } = await client.query(
-        `
-          SELECT
-            cp.x,
-            cp.y,
-            cp.updated_by AS owner_id,
-            CASE
-              WHEN cp.owner_tag = '~Admin~' THEN 'Admin'
-              WHEN cp.owner_tag = 'Admin' THEN 'Admin'
-              WHEN cp.updated_by IS NOT NULL THEN COALESCE(NULLIF(u.username, ''), SPLIT_PART(u.email, '@', 1), cp.owner_tag)
-              ELSE COALESCE(NULLIF(cp.owner_tag, ''), 'Guest')
-            END AS owner_tag
-          FROM canvas_pixels cp
-          LEFT JOIN users u ON u.id = cp.updated_by
-        `
-      );
-
+      const canvasRows = await fetchCanvasOwnershipRows(client);
       const groups = buildProtectedGroups(canvasRows);
       targetGroup = resolveTargetGroup(groups, targetGroupX, targetGroupY, targetOwnerTag);
       if (targetGroup) {
@@ -861,11 +1027,6 @@ router.post("/interactions", requireAuth, async (req, res, next) => {
         owner_id: null,
         owner_tag: null
       }));
-    }
-
-    if (!actorIsAdmin && interactionType === "remove" && targetUserId !== null) {
-      // Remove now means removing an owned bubble.
-      interactionTargetUserId = actorUserId;
     }
 
     if (!actorIsAdmin && interactionType === "ban" && targetUserId !== null) {
