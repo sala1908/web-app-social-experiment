@@ -69,6 +69,8 @@ function createApp() {
         email: req.session.adminUsername || "admin",
         username: "admin",
         displayName: "admin",
+        xp: 0,
+        level: 0,
         isAdmin: true
       };
       res.locals.currentUser = req.user;
@@ -80,7 +82,7 @@ function createApp() {
     }
 
     try {
-      const { rows } = await pool.query("SELECT id, email, username FROM users WHERE id = $1", [req.session.userId]);
+      const { rows } = await pool.query("SELECT id, email, username, xp, level FROM users WHERE id = $1", [req.session.userId]);
       req.user = rows[0]
         ? {
             ...rows[0],

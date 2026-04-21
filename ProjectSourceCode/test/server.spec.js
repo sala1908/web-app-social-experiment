@@ -66,6 +66,32 @@ describe("Auth registration API", function () {
     const { rows } = await pool.query("SELECT id FROM users WHERE email = $1", [email]);
     expect(rows).to.have.length(0);
   });
+
+  it("Positive: returns user xp and level from /api/me on initial logged-in load", async function () {
+    this.timeout(7000);
+
+    const email = `me_state_${Date.now()}@example.com`;
+    const username = `me_state_${Date.now()}`;
+    const password = "validpass123";
+    const agent = chai.request.agent(globalServer);
+
+    await agent
+      .post("/auth/register")
+      .type("form")
+      .send({ email, username, password });
+
+    const { rows: userRows } = await pool.query("SELECT id FROM users WHERE email = $1", [email]);
+    const userId = userRows[0].id;
+    await pool.query("UPDATE users SET xp = 245, level = 2 WHERE id = $1", [userId]);
+
+    const meRes = await agent.get("/api/me");
+    expect(meRes).to.have.status(200);
+    expect(meRes.body).to.have.property("authenticated", true);
+    expect(meRes.body).to.have.property("user");
+    expect(meRes.body.user).to.include({ xp: 245, level: 2 });
+
+    agent.close();
+  });
 });
 
 describe("Paint API", function () {
@@ -101,6 +127,45 @@ describe("Paint API", function () {
     expect(rows).to.have.length(1);
     expect(rows[0].color_hex).to.equal("#FF0000");
     expect(rows[0].owner_tag).to.be.a("string");
+  });
+
+  it("Positive: awards 1 XP per painted pixel and levels up from level 0", async function () {
+    this.timeout(7000);
+
+    const email = `xp_user_${Date.now()}@example.com`;
+    const username = `xp_user_${Date.now()}`;
+    const password = "validpass123";
+    const agent = chai.request.agent(globalServer);
+
+    await agent
+      .post("/auth/register")
+      .type("form")
+      .send({ email, username, password });
+
+    const userRow = await pool.query("SELECT id FROM users WHERE email = $1", [email]);
+    const userId = userRow.rows[0].id;
+
+    await pool.query("UPDATE users SET xp = 99, level = 0 WHERE id = $1", [userId]);
+
+    const res = await agent
+      .post("/api/paint")
+      .send({
+        x: 210,
+        y: 211,
+        brushSize: 1,
+        mode: "paint",
+        color: "#00FF00"
+      });
+
+    expect(res).to.have.status(200);
+    expect(res.body).to.include({ xpGained: 1, xp: 100, level: 1 });
+
+    const { rows } = await pool.query("SELECT xp, level FROM users WHERE id = $1", [userId]);
+    expect(rows).to.have.length(1);
+    expect(rows[0].xp).to.equal(100);
+    expect(rows[0].level).to.equal(1);
+
+    agent.close();
   });
 
   it("Negative: rejects paint request with out-of-bounds coordinates", async function () {

@@ -31,15 +31,35 @@
     || (toolbar && toolbar.dataset && String(toolbar.dataset.authenticated).toLowerCase() === "true")
     || Boolean(window.APP_USER && window.APP_USER.id);
   let viewerRole = isAdmin ? "admin" : authenticated ? "user" : "guest";
-  let currentUser = window.APP_USER || null;
+  let currentUser = normalizeUserProgress(window.APP_USER || null);
   const ctx = canvas.getContext("2d");
   const pixels = new Map();
 
+  function normalizeUserProgress(user) {
+    if (!user || typeof user !== "object") {
+      return user;
+    }
+
+    const normalized = { ...user };
+    const parsedLevel = Number(normalized.level);
+    const parsedXp = Number(normalized.xp);
+
+    normalized.level = Number.isFinite(parsedLevel) && parsedLevel >= 0
+      ? Math.floor(parsedLevel)
+      : 0;
+    normalized.xp = Number.isFinite(parsedXp) && parsedXp >= 0
+      ? Math.floor(parsedXp)
+      : 0;
+
+    return normalized;
+  }
+
   function applyViewerStateFromUser(user, authFlag) {
-    currentUser = user || null;
-    const serverAdmin = Boolean(user && user.isAdmin);
-    const serverAuthenticated = Boolean(authFlag || serverAdmin || (user && user.id));
-    isAdmin = serverAdmin || isAdmin;
+    const normalizedUser = normalizeUserProgress(user || null);
+    currentUser = normalizedUser;
+    const serverAdmin = Boolean(normalizedUser && normalizedUser.isAdmin);
+    const serverAuthenticated = Boolean(authFlag || serverAdmin || (normalizedUser && normalizedUser.id));
+    isAdmin = serverAdmin;
     authenticated = serverAuthenticated;
     viewerRole = isAdmin ? "admin" : authenticated ? "user" : "guest";
   }
@@ -119,10 +139,21 @@
       return;
     }
 
+    const level = Number(currentUser && currentUser.level);
+    const xp = Number(currentUser && currentUser.xp);
+    const hasProgress = Number.isFinite(level) && Number.isFinite(xp);
+
     if (typeof state.remainingPaints === "number") {
       pixelCountEl.textContent = `Pixels left today: ${state.remainingPaints}`;
-      usageEl.textContent = `Paints remaining today: ${state.remainingPaints}`;
+      usageEl.textContent = hasProgress
+        ? `Level ${Math.max(0, level)} | XP ${Math.max(0, xp)} | Paints remaining today: ${state.remainingPaints}`
+        : `Paints remaining today: ${state.remainingPaints}`;
+      return;
     }
+
+    usageEl.textContent = hasProgress
+      ? `Level ${Math.max(0, level)} | XP ${Math.max(0, xp)}`
+      : "Paint mode: ready.";
   }
 
   function keyFor(x, y) {
@@ -926,6 +957,10 @@
       }
 
       state.remainingPaints = payload.remainingPaints;
+      if (currentUser && Number.isFinite(Number(payload.xp)) && Number.isFinite(Number(payload.level))) {
+        currentUser.xp = Number(payload.xp);
+        currentUser.level = Number(payload.level);
+      }
       applyModifiedPixels(payload.modifiedPixels);
       updateUsage();
     }).catch(() => {
@@ -1152,12 +1187,15 @@
       });
     }
 
-    updateUsage();
   }
 
   async function init() {
+    await refreshViewerState();
+
     bindEvents();
     resizeCanvas();
+    updateUsage();
+
     await loadCanvas();
 
     await loadPalette();

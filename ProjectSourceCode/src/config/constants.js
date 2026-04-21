@@ -3,6 +3,7 @@ const MAX_BRUSH_SIZE = 5;
 const DAILY_MAX_PAINTS = 100;
 const GUEST_MAX_PAINTS = Math.floor(DAILY_MAX_PAINTS / 2);
 const COOLDOWN_SECONDS = 0;
+const XP_PER_LEVEL = 100;
 
 
 const DEFAULT_PALETTE = [
@@ -25,5 +26,6 @@ module.exports = {
   DAILY_MAX_PAINTS,
   GUEST_MAX_PAINTS,
   COOLDOWN_SECONDS,
+  XP_PER_LEVEL,
   DEFAULT_PALETTE
 };

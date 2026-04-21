@@ -1,7 +1,7 @@
 const express = require("express");
 const { pool } = require("../db/pool");
 const { requireAuth, requireAdmin } = require("../middleware/auth");
-const { GRID_SIZE, MAX_BRUSH_SIZE, DAILY_MAX_PAINTS, GUEST_MAX_PAINTS } = require("../config/constants");
+const { GRID_SIZE, MAX_BRUSH_SIZE, DAILY_MAX_PAINTS, GUEST_MAX_PAINTS, XP_PER_LEVEL } = require("../config/constants");
 
 const router = express.Router();
 
@@ -342,7 +342,7 @@ router.get("/canvas", async (req, res, next) => {
 router.get("/me", (req, res) => {
   const isAdmin = Boolean(req.session && req.session.isAdmin);
   const customUser = isAdmin
-    ? { id: null, username: "Admin", email: null, isAdmin: true }
+    ? { id: null, username: "Admin", email: null, xp: 0, level: 0, isAdmin: true }
     : req.user || null;
 
   return res.json({
@@ -564,6 +564,30 @@ router.post("/paint", async (req, res, next) => {
       }
     }
 
+    let userProgress = null;
+    const xpGained = userId && mode === "paint" ? modifiedPixels.length : 0;
+
+    if (userId) {
+      if (xpGained > 0) {
+        const { rows } = await client.query(
+          `
+            UPDATE users
+            SET
+              xp = xp + $2,
+              level = FLOOR((xp + $2)::numeric / $3)::int
+            WHERE id = $1
+            RETURNING xp, level
+          `,
+          [userId, xpGained, XP_PER_LEVEL]
+        );
+
+        userProgress = rows[0] || null;
+      } else {
+        const { rows } = await client.query("SELECT xp, level FROM users WHERE id = $1", [userId]);
+        userProgress = rows[0] || null;
+      }
+    }
+
     await client.query("COMMIT");
 
     const nextRemaining = typeof remaining === "number" ? Math.max(0, remaining - 1) : null;
@@ -580,6 +604,9 @@ router.post("/paint", async (req, res, next) => {
     return res.json({
       ok: true,
       remainingPaints: nextRemaining,
+      xpGained,
+      xp: userProgress ? userProgress.xp : null,
+      level: userProgress ? userProgress.level : null,
       modifiedPixels
     });
   } catch (error) {
