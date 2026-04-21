@@ -1,7 +1,7 @@
 const express = require("express");
 const { pool } = require("../db/pool");
 const { requireAuth, requireAdmin } = require("../middleware/auth");
-const { GRID_SIZE, MAX_BRUSH_SIZE, DAILY_MAX_PAINTS, GUEST_MAX_PAINTS } = require("../config/constants");
+const { GRID_SIZE, MAX_BRUSH_SIZE, DAILY_MAX_PAINTS, GUEST_MAX_PAINTS, XP_PER_LEVEL } = require("../config/constants");
 
 const router = express.Router();
 
@@ -9,14 +9,174 @@ function isHexColor(color) {
   return /^#[0-9A-F]{6}$/i.test(color || "");
 }
 
-async function getAllowedColors(dbClient) {
+const STARTER_PALETTE_ID = "starter_classic";
+
+function normalizeLevel(level) {
+  const parsed = Number(level);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return 0;
+  }
+
+  return Math.floor(parsed);
+}
+
+function normalizePaletteId(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+async function getPaletteCatalog(dbClient) {
   const { rows } = await dbClient.query(
     `
-      SELECT color_hex FROM default_palette
+      SELECT
+        psi.palette_id,
+        psi.name,
+        psi.description,
+        psi.is_starter,
+        psc.color_hex,
+        psc.color_order
+      FROM palette_store_items psi
+      LEFT JOIN palette_store_colors psc ON psc.palette_id = psi.palette_id
+      ORDER BY psi.is_starter DESC, psi.palette_id ASC, psc.color_order ASC, psc.color_hex ASC
     `
   );
 
-  return new Set(rows.map((row) => row.color_hex.toUpperCase()));
+  const byId = new Map();
+  for (const row of rows) {
+    if (!byId.has(row.palette_id)) {
+      byId.set(row.palette_id, {
+        paletteId: row.palette_id,
+        name: row.name,
+        description: row.description,
+        isStarter: Boolean(row.is_starter),
+        colors: []
+      });
+    }
+
+    if (row.color_hex) {
+      byId.get(row.palette_id).colors.push(row.color_hex.toUpperCase());
+    }
+  }
+
+  return Array.from(byId.values());
+}
+
+function findPalette(catalog, paletteId) {
+  return catalog.find((item) => item.paletteId === paletteId) || null;
+}
+
+function formatPaletteColors(palette) {
+  if (!palette) {
+    return [];
+  }
+
+  return palette.colors.map((colorHex) => ({
+    color_hex: colorHex,
+    scope: palette.paletteId
+  }));
+}
+
+async function getUserPaletteContext(dbClient, userId) {
+  const { rows } = await dbClient.query(
+    "SELECT level, palette_tokens, selected_palette_id FROM users WHERE id = $1",
+    [userId]
+  );
+
+  if (rows.length === 0) {
+    return null;
+  }
+
+  const user = rows[0];
+  const { rows: unlockedRows } = await dbClient.query(
+    "SELECT palette_id FROM user_unlocked_palettes WHERE user_id = $1",
+    [userId]
+  );
+
+  const unlockedSet = new Set([STARTER_PALETTE_ID]);
+  unlockedRows.forEach((row) => unlockedSet.add(row.palette_id));
+
+  const requestedSelection = normalizePaletteId(user.selected_palette_id) || STARTER_PALETTE_ID;
+  const selectedPaletteId = unlockedSet.has(requestedSelection) ? requestedSelection : STARTER_PALETTE_ID;
+
+  if (selectedPaletteId !== requestedSelection) {
+    await dbClient.query("UPDATE users SET selected_palette_id = $2 WHERE id = $1", [userId, selectedPaletteId]);
+  }
+
+  return {
+    level: normalizeLevel(user.level),
+    paletteTokens: Math.max(0, Number(user.palette_tokens) || 0),
+    selectedPaletteId,
+    unlockedPaletteIds: Array.from(unlockedSet)
+  };
+}
+
+async function buildPaletteResponse(dbClient, req) {
+  const isAdmin = Boolean(req.session && req.session.isAdmin);
+  const userId = req.session && req.session.userId ? req.session.userId : null;
+  const catalog = await getPaletteCatalog(dbClient);
+
+  if (isAdmin) {
+    const selectedFromSession = normalizePaletteId(req.session.adminPaletteId) || STARTER_PALETTE_ID;
+    const selectedPalette = findPalette(catalog, selectedFromSession) || findPalette(catalog, STARTER_PALETTE_ID);
+    const selectedPaletteId = selectedPalette ? selectedPalette.paletteId : STARTER_PALETTE_ID;
+    req.session.adminPaletteId = selectedPaletteId;
+
+    return {
+      palette: formatPaletteColors(selectedPalette),
+      selectedPaletteId,
+      selectedPaletteName: selectedPalette ? selectedPalette.name : "Starter Classic",
+      paletteTokens: 999,
+      unlockedPaletteIds: catalog.map((item) => item.paletteId),
+      availablePalettes: catalog,
+      guest: false,
+      admin: true
+    };
+  }
+
+  if (!userId) {
+    const starter = findPalette(catalog, STARTER_PALETTE_ID);
+    return {
+      palette: formatPaletteColors(starter),
+      selectedPaletteId: STARTER_PALETTE_ID,
+      selectedPaletteName: starter ? starter.name : "Starter Classic",
+      paletteTokens: 0,
+      unlockedPaletteIds: [STARTER_PALETTE_ID],
+      availablePalettes: catalog,
+      guest: true,
+      admin: false
+    };
+  }
+
+  const context = await getUserPaletteContext(dbClient, userId);
+  if (!context) {
+    return {
+      palette: [],
+      selectedPaletteId: STARTER_PALETTE_ID,
+      selectedPaletteName: "Starter Classic",
+      paletteTokens: 0,
+      unlockedPaletteIds: [STARTER_PALETTE_ID],
+      availablePalettes: catalog,
+      guest: false,
+      admin: false
+    };
+  }
+
+  const selectedPalette = findPalette(catalog, context.selectedPaletteId) || findPalette(catalog, STARTER_PALETTE_ID);
+  return {
+    palette: formatPaletteColors(selectedPalette),
+    selectedPaletteId: context.selectedPaletteId,
+    selectedPaletteName: selectedPalette ? selectedPalette.name : "Starter Classic",
+    paletteTokens: context.paletteTokens,
+    unlockedPaletteIds: context.unlockedPaletteIds,
+    availablePalettes: catalog,
+    guest: false,
+    admin: false,
+    level: context.level
+  };
+}
+
+async function getAllowedColors(dbClient, req) {
+  const payload = await buildPaletteResponse(dbClient, req);
+  return new Set((payload.palette || []).map((row) => String(row.color_hex || "").toUpperCase()));
 }
 
 async function getRemainingPaints(client, userId) {
@@ -342,7 +502,7 @@ router.get("/canvas", async (req, res, next) => {
 router.get("/me", (req, res) => {
   const isAdmin = Boolean(req.session && req.session.isAdmin);
   const customUser = isAdmin
-    ? { id: null, username: "Admin", email: null, isAdmin: true }
+    ? { id: null, username: "Admin", email: null, xp: 0, level: 0, palette_tokens: 999, selected_palette_id: req.session.adminPaletteId || STARTER_PALETTE_ID, isAdmin: true }
     : req.user || null;
 
   return res.json({
@@ -377,45 +537,154 @@ router.get("/me/limits", requireAuth, async (req, res, next) => {
 });
 
 router.get("/palette", async (req, res, next) => {
-  if (req.session && req.session.isAdmin) {
-    try {
-      const { rows } = await pool.query(
-        `
-          SELECT color_hex, 'default' AS scope FROM default_palette
-          ORDER BY color_hex ASC
-        `
-      );
-      return res.json({ palette: rows });
-    } catch (error) {
-      return next(error);
-    }
-  }
-
-  if (!req.session || !req.session.userId) {
-    try {
-      const { rows } = await pool.query(
-        `
-          SELECT color_hex, 'default' AS scope FROM default_palette
-          ORDER BY color_hex ASC
-        `
-      );
-      return res.json({ palette: rows, guest: true });
-    } catch (error) {
-      return next(error);
-    }
-  }
-
   try {
-    const { rows } = await pool.query(
-      `
-        SELECT color_hex, 'default' AS scope FROM default_palette
-        ORDER BY color_hex ASC
-      `
-    );
-
-    return res.json({ palette: rows });
+    const payload = await buildPaletteResponse(pool, req);
+    return res.json(payload);
   } catch (error) {
     return next(error);
+  }
+});
+
+router.get("/palette/store", async (req, res, next) => {
+  try {
+    const payload = await buildPaletteResponse(pool, req);
+    const unlocked = new Set(payload.unlockedPaletteIds || []);
+    const canSpendToken = Number(payload.paletteTokens || 0) > 0;
+    const items = (payload.availablePalettes || []).map((item) => ({
+      paletteId: item.paletteId,
+      name: item.name,
+      description: item.description,
+      isStarter: item.isStarter,
+      colors: item.colors,
+      unlocked: payload.admin ? true : unlocked.has(item.paletteId),
+      canUnlock: !payload.admin && !item.isStarter && !unlocked.has(item.paletteId) && canSpendToken,
+      selected: payload.selectedPaletteId === item.paletteId
+    }));
+
+    return res.json({
+      tokens: Number(payload.paletteTokens || 0),
+      selectedPaletteId: payload.selectedPaletteId,
+      items,
+      admin: payload.admin,
+      guest: payload.guest
+    });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+router.post("/palette/select", requireAuth, async (req, res, next) => {
+  const paletteId = normalizePaletteId(req.body.paletteId);
+  if (!paletteId) {
+    return res.status(400).json({ error: "Palette id is required." });
+  }
+
+  const client = await pool.connect();
+  try {
+    const catalog = await getPaletteCatalog(client);
+    const targetPalette = findPalette(catalog, paletteId);
+    if (!targetPalette) {
+      return res.status(404).json({ error: "Palette was not found." });
+    }
+
+    if (req.session && req.session.isAdmin) {
+      req.session.adminPaletteId = paletteId;
+      const payload = await buildPaletteResponse(client, req);
+      return res.json({ ok: true, ...payload });
+    }
+
+    const userId = req.session && req.session.userId ? req.session.userId : null;
+    if (!userId) {
+      return res.status(400).json({ error: "User context is missing." });
+    }
+
+    const context = await getUserPaletteContext(client, userId);
+    if (!context || !context.unlockedPaletteIds.includes(paletteId)) {
+      return res.status(403).json({ error: "Palette is not unlocked yet." });
+    }
+
+    await client.query("UPDATE users SET selected_palette_id = $2 WHERE id = $1", [userId, paletteId]);
+    const payload = await buildPaletteResponse(client, req);
+    return res.json({ ok: true, ...payload });
+  } catch (error) {
+    return next(error);
+  } finally {
+    client.release();
+  }
+});
+
+router.post("/palette/store/unlock", requireAuth, async (req, res, next) => {
+  if (req.session && req.session.isAdmin) {
+    const payload = await buildPaletteResponse(pool, req);
+    return res.json({ ok: true, message: "Admin already has all palettes unlocked.", ...payload });
+  }
+
+  const paletteId = normalizePaletteId(req.body.paletteId);
+  if (!paletteId) {
+    return res.status(400).json({ error: "Palette id is required." });
+  }
+
+  const userId = req.session && req.session.userId ? req.session.userId : null;
+  if (!userId) {
+    return res.status(400).json({ error: "User context is missing." });
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const catalog = await getPaletteCatalog(client);
+    const targetPalette = findPalette(catalog, paletteId);
+    if (!targetPalette) {
+      await client.query("ROLLBACK");
+      return res.status(404).json({ error: "Palette was not found." });
+    }
+
+    if (targetPalette.isStarter) {
+      await client.query("ROLLBACK");
+      return res.status(400).json({ error: "Starter palette is already available." });
+    }
+
+    const { rows: userRows } = await client.query(
+      "SELECT palette_tokens FROM users WHERE id = $1 FOR UPDATE",
+      [userId]
+    );
+    if (userRows.length === 0) {
+      await client.query("ROLLBACK");
+      return res.status(404).json({ error: "User was not found." });
+    }
+
+    const currentTokens = Math.max(0, Number(userRows[0].palette_tokens) || 0);
+    if (currentTokens <= 0) {
+      await client.query("ROLLBACK");
+      return res.status(400).json({ error: "No level-up tokens available. Level up to earn more." });
+    }
+
+    const { rows: existingRows } = await client.query(
+      "SELECT 1 FROM user_unlocked_palettes WHERE user_id = $1 AND palette_id = $2 LIMIT 1",
+      [userId, paletteId]
+    );
+    if (existingRows.length > 0) {
+      await client.query("ROLLBACK");
+      return res.status(400).json({ error: "Palette is already unlocked." });
+    }
+
+    await client.query(
+      "INSERT INTO user_unlocked_palettes (user_id, palette_id) VALUES ($1, $2)",
+      [userId, paletteId]
+    );
+    await client.query(
+      "UPDATE users SET palette_tokens = GREATEST(0, palette_tokens - 1) WHERE id = $1",
+      [userId]
+    );
+
+    await client.query("COMMIT");
+    const payload = await buildPaletteResponse(client, req);
+    return res.json({ ok: true, unlockedPaletteId: paletteId, ...payload });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    return next(error);
+  } finally {
+    client.release();
   }
 });
 
@@ -473,7 +742,7 @@ router.post("/paint", async (req, res, next) => {
       }
     }
 
-    const allowedColors = await getAllowedColors(client);
+    const allowedColors = await getAllowedColors(client, req);
     const color = rawColor.toUpperCase();
 
     if (mode === "paint" && !allowedColors.has(color)) {
@@ -564,6 +833,46 @@ router.post("/paint", async (req, res, next) => {
       }
     }
 
+    let userProgress = null;
+    let previousLevel = null;
+    let levelsGained = 0;
+    let tokensGained = 0;
+    const xpGained = userId && mode === "paint" ? modifiedPixels.length : 0;
+
+    if (userId) {
+      if (xpGained > 0) {
+        const { rows: currentRows } = await client.query(
+          "SELECT xp, level FROM users WHERE id = $1 FOR UPDATE",
+          [userId]
+        );
+
+        const current = currentRows[0] || { xp: 0, level: 0 };
+        previousLevel = normalizeLevel(current.level);
+        const nextXp = Math.max(0, Number(current.xp || 0)) + xpGained;
+        const nextLevel = Math.floor(nextXp / XP_PER_LEVEL);
+        levelsGained = Math.max(0, nextLevel - previousLevel);
+        tokensGained = levelsGained;
+
+        const { rows } = await client.query(
+          `
+            UPDATE users
+            SET
+              xp = $2,
+              level = $3,
+              palette_tokens = palette_tokens + $4
+            WHERE id = $1
+            RETURNING xp, level, palette_tokens, selected_palette_id
+          `,
+          [userId, nextXp, nextLevel, tokensGained]
+        );
+
+        userProgress = rows[0] || null;
+      } else {
+        const { rows } = await client.query("SELECT xp, level, palette_tokens, selected_palette_id FROM users WHERE id = $1", [userId]);
+        userProgress = rows[0] || null;
+      }
+    }
+
     await client.query("COMMIT");
 
     const nextRemaining = typeof remaining === "number" ? Math.max(0, remaining - 1) : null;
@@ -580,6 +889,14 @@ router.post("/paint", async (req, res, next) => {
     return res.json({
       ok: true,
       remainingPaints: nextRemaining,
+      xpGained,
+      xp: userProgress ? userProgress.xp : null,
+      level: userProgress ? userProgress.level : null,
+      previousLevel,
+      levelsGained,
+      tokensGained,
+      paletteTokens: userProgress ? userProgress.palette_tokens : null,
+      selectedPaletteId: userProgress ? userProgress.selected_palette_id : null,
       modifiedPixels
     });
   } catch (error) {

@@ -66,6 +66,32 @@ describe("Auth registration API", function () {
     const { rows } = await pool.query("SELECT id FROM users WHERE email = $1", [email]);
     expect(rows).to.have.length(0);
   });
+
+  it("Positive: returns user xp and level from /api/me on initial logged-in load", async function () {
+    this.timeout(7000);
+
+    const email = `me_state_${Date.now()}@example.com`;
+    const username = `me_state_${Date.now()}`;
+    const password = "validpass123";
+    const agent = chai.request.agent(globalServer);
+
+    await agent
+      .post("/auth/register")
+      .type("form")
+      .send({ email, username, password });
+
+    const { rows: userRows } = await pool.query("SELECT id FROM users WHERE email = $1", [email]);
+    const userId = userRows[0].id;
+    await pool.query("UPDATE users SET xp = 245, level = 2 WHERE id = $1", [userId]);
+
+    const meRes = await agent.get("/api/me");
+    expect(meRes).to.have.status(200);
+    expect(meRes.body).to.have.property("authenticated", true);
+    expect(meRes.body).to.have.property("user");
+    expect(meRes.body.user).to.include({ xp: 245, level: 2 });
+
+    agent.close();
+  });
 });
 
 describe("Paint API", function () {
@@ -79,7 +105,7 @@ describe("Paint API", function () {
       y: 150,
       brushSize: 1,
       mode: "paint",
-      color: "#FF0000"
+      color: "#000000"
     };
 
     const res = await chai
@@ -91,7 +117,7 @@ describe("Paint API", function () {
     expect(res.body).to.have.property("ok").that.is.true;
     expect(res.body).to.have.property("modifiedPixels").that.is.an("array");
     expect(res.body.modifiedPixels).to.have.length(1);
-    expect(res.body.modifiedPixels[0]).to.include({ x: 100, y: 150, color_hex: "#FF0000" });
+    expect(res.body.modifiedPixels[0]).to.include({ x: 100, y: 150, color_hex: "#000000" });
     expect(res.body.modifiedPixels[0]).to.have.property("owner_tag");
 
     const { rows } = await pool.query(
@@ -99,8 +125,47 @@ describe("Paint API", function () {
       [100, 150]
     );
     expect(rows).to.have.length(1);
-    expect(rows[0].color_hex).to.equal("#FF0000");
+    expect(rows[0].color_hex).to.equal("#000000");
     expect(rows[0].owner_tag).to.be.a("string");
+  });
+
+  it("Positive: awards 1 XP per painted pixel and levels up from level 0", async function () {
+    this.timeout(7000);
+
+    const email = `xp_user_${Date.now()}@example.com`;
+    const username = `xp_user_${Date.now()}`;
+    const password = "validpass123";
+    const agent = chai.request.agent(globalServer);
+
+    await agent
+      .post("/auth/register")
+      .type("form")
+      .send({ email, username, password });
+
+    const userRow = await pool.query("SELECT id FROM users WHERE email = $1", [email]);
+    const userId = userRow.rows[0].id;
+
+    await pool.query("UPDATE users SET xp = 99, level = 0 WHERE id = $1", [userId]);
+
+    const res = await agent
+      .post("/api/paint")
+      .send({
+        x: 210,
+        y: 211,
+        brushSize: 1,
+        mode: "paint",
+        color: "#000000"
+      });
+
+    expect(res).to.have.status(200);
+    expect(res.body).to.include({ xpGained: 1, xp: 100, level: 1 });
+
+    const { rows } = await pool.query("SELECT xp, level FROM users WHERE id = $1", [userId]);
+    expect(rows).to.have.length(1);
+    expect(rows[0].xp).to.equal(100);
+    expect(rows[0].level).to.equal(1);
+
+    agent.close();
   });
 
   it("Negative: rejects paint request with out-of-bounds coordinates", async function () {
@@ -111,7 +176,7 @@ describe("Paint API", function () {
       y: 500,
       brushSize: 1,
       mode: "paint",
-      color: "#00FF00"
+      color: "#000000"
     };
 
     const res = await chai
@@ -163,7 +228,7 @@ describe("Social interactions", function () {
           y: pixel.y,
           brushSize: 1,
           mode: "paint",
-          color: "#00FF00"
+          color: "#000000"
         });
 
       expect(paintResponse).to.have.status(200);
@@ -179,7 +244,7 @@ describe("Social interactions", function () {
         y: 641,
         brushSize: 1,
         mode: "paint",
-        color: "#FF0000"
+        color: "#FFFFFF"
       });
 
     expect(protectedGroupPaint).to.have.status(403);
@@ -289,5 +354,118 @@ describe("Social interactions", function () {
     );
 
     expect(rows.map((row) => row.interaction_type)).to.include.members(["like", "report", "friend", "love", "remove", "ban"]);
+  });
+});
+
+describe("Palette store and level-up tokens", function () {
+  this.timeout(15000);
+
+  it("returns 3-color level 0 palette for guests", async function () {
+    const res = await chai.request(globalServer).get("/api/palette");
+    expect(res).to.have.status(200);
+    expect(res.body).to.have.property("guest", true);
+
+    const colors = res.body.palette.map((entry) => entry.color_hex);
+    expect(colors).to.include.members(["#000000", "#FFFFFF", "#7F7F7F"]);
+    expect(colors).to.not.include("#FF595E");
+  });
+
+  it("grants level-up token and unlocks a palette pack that can be selected", async function () {
+    const ts = Date.now();
+    const password = "validpass123";
+    const emailA = `unlock_a_${ts}@example.com`;
+    const userA = `unlock_a_${ts}`;
+    const agentA = chai.request.agent(globalServer);
+
+    await agentA.post("/auth/register").type("form").send({ email: emailA, username: userA, password });
+    const rowA = await pool.query("SELECT id FROM users WHERE email = $1", [emailA]);
+    const userId = rowA.rows[0].id;
+
+    await pool.query("UPDATE users SET xp = 99, level = 0, palette_tokens = 0, selected_palette_id = 'starter_classic' WHERE id = $1", [userId]);
+
+    const levelUpPaint = await agentA.post("/api/paint").send({
+      x: 700,
+      y: 701,
+      brushSize: 1,
+      mode: "paint",
+      color: "#000000"
+    });
+
+    expect(levelUpPaint).to.have.status(200);
+    expect(levelUpPaint.body).to.include({ level: 1, levelsGained: 1, tokensGained: 1, paletteTokens: 1 });
+
+    const beforeUnlock = await agentA.get("/api/palette");
+    const starterColors = beforeUnlock.body.palette.map((entry) => entry.color_hex);
+    expect(starterColors).to.include.members(["#000000", "#FFFFFF", "#7F7F7F"]);
+    expect(starterColors).to.not.include("#FF595E");
+
+    const unlockResponse = await agentA.post("/api/palette/store/unlock").send({ paletteId: "sunset_burst" });
+    expect(unlockResponse).to.have.status(200);
+    expect(unlockResponse.body).to.have.property("ok", true);
+    expect(unlockResponse.body).to.have.property("paletteTokens", 0);
+
+    const selectResponse = await agentA.post("/api/palette/select").send({ paletteId: "sunset_burst" });
+    expect(selectResponse).to.have.status(200);
+    expect(selectResponse.body).to.have.property("selectedPaletteId", "sunset_burst");
+
+    const afterSelect = await agentA.get("/api/palette");
+    const unlockedPaletteColors = afterSelect.body.palette.map((entry) => entry.color_hex);
+    expect(unlockedPaletteColors).to.include("#FF595E");
+    expect(unlockedPaletteColors).to.not.include("#000000");
+
+    agentA.close();
+  });
+
+  it("lets user save token and unlock later", async function () {
+    const ts = Date.now();
+    const password = "validpass123";
+    const email = `save_token_${ts}@example.com`;
+    const username = `save_token_${ts}`;
+    const agent = chai.request.agent(globalServer);
+
+    await agent.post("/auth/register").type("form").send({ email, username, password });
+    const user = await pool.query("SELECT id FROM users WHERE email = $1", [email]);
+    await pool.query("UPDATE users SET palette_tokens = 2, selected_palette_id = 'starter_classic' WHERE id = $1", [user.rows[0].id]);
+
+    const storeBefore = await agent.get("/api/palette/store");
+    expect(storeBefore).to.have.status(200);
+    expect(storeBefore.body).to.have.property("tokens", 2);
+
+    const paletteBefore = await agent.get("/api/palette");
+    expect(paletteBefore.body.palette.map((entry) => entry.color_hex)).to.include.members(["#000000", "#FFFFFF", "#7F7F7F"]);
+
+    const unlockRes = await agent.post("/api/palette/store/unlock").send({ paletteId: "ocean_bloom" });
+    expect(unlockRes).to.have.status(200);
+    expect(unlockRes.body).to.have.property("paletteTokens", 1);
+
+    const selectRes = await agent.post("/api/palette/select").send({ paletteId: "ocean_bloom" });
+    expect(selectRes).to.have.status(200);
+    expect(selectRes.body).to.have.property("selectedPaletteId", "ocean_bloom");
+
+    agent.close();
+  });
+
+  it("gives admin all palettes without manual unlocks", async function () {
+    const adminAgent = chai.request.agent(globalServer);
+
+    await adminAgent
+      .post("/auth/login")
+      .type("form")
+      .send({ email: "admin", password: "12345678" });
+
+    const paletteRes = await adminAgent.get("/api/palette");
+    expect(paletteRes).to.have.status(200);
+    expect(paletteRes.body).to.have.property("admin", true);
+    expect(paletteRes.body.availablePalettes.length).to.be.at.least(11);
+
+    const unlockRes = await adminAgent.post("/api/palette/store/unlock").send({ paletteId: "sunset_burst" });
+    expect(unlockRes).to.have.status(200);
+    expect(unlockRes.body).to.have.property("ok", true);
+
+    const selectRes = await adminAgent.post("/api/palette/select").send({ paletteId: "sunset_burst" });
+    expect(selectRes).to.have.status(200);
+    expect(selectRes.body).to.have.property("selectedPaletteId", "sunset_burst");
+
+    adminAgent.close();
   });
 });
