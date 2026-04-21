@@ -33,6 +33,24 @@ CREATE TABLE IF NOT EXISTS user_palette (
   CHECK (color_hex ~* '^#[0-9A-F]{6}$')
 );
 
+CREATE TABLE IF NOT EXISTS level_palette_colors (
+  color_hex TEXT PRIMARY KEY,
+  color_family TEXT NOT NULL,
+  min_level INTEGER NOT NULL CHECK (min_level >= 0),
+  shade_tier INTEGER NOT NULL DEFAULT 0 CHECK (shade_tier >= 0),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CHECK (color_hex ~* '^#[0-9A-F]{6}$')
+);
+
+CREATE TABLE IF NOT EXISTS user_palette_unlocks (
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  color_hex TEXT NOT NULL REFERENCES level_palette_colors(color_hex) ON DELETE CASCADE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (user_id, color_hex)
+);
+
+CREATE INDEX IF NOT EXISTS idx_level_palette_min_level_tier ON level_palette_colors (min_level, shade_tier);
+
 CREATE TABLE IF NOT EXISTS canvas_pixels (
   x INTEGER NOT NULL,
   y INTEGER NOT NULL,
@@ -147,3 +165,60 @@ VALUES
   ('#FF00FF'),
   ('#7F7F7F')
 ON CONFLICT DO NOTHING;
+
+INSERT INTO level_palette_colors (color_hex, color_family, min_level, shade_tier)
+VALUES
+  ('#000000', 'black', 0, 0),
+  ('#FFFFFF', 'white', 0, 0),
+  ('#7F7F7F', 'gray', 0, 0),
+
+  ('#3F3F3F', 'gray', 1, 0),
+  ('#5F5F5F', 'gray', 1, 0),
+  ('#9F9F9F', 'gray', 1, 0),
+  ('#BFBFBF', 'gray', 1, 0),
+
+  ('#FF0000', 'red', 2, 0),
+  ('#00FF00', 'green', 2, 0),
+  ('#0000FF', 'blue', 2, 0),
+
+  ('#800080', 'purple', 3, 0),
+  ('#FF7F00', 'orange', 3, 0),
+
+  ('#FFFF00', 'yellow', 4, 0),
+  ('#00FFFF', 'cyan', 4, 0),
+  ('#FF00FF', 'magenta', 4, 0),
+  ('#8B4513', 'brown', 4, 0),
+  ('#FFC0CB', 'pink', 4, 0),
+
+  ('#1A1A1A', 'black', 0, 1),
+  ('#E6E6E6', 'white', 0, 1),
+  ('#A0A0A0', 'gray', 1, 1),
+  ('#CC0000', 'red', 2, 1),
+  ('#00CC00', 'green', 2, 1),
+  ('#0000CC', 'blue', 2, 1),
+  ('#9932CC', 'purple', 3, 1),
+  ('#FFA64D', 'orange', 3, 1),
+  ('#FFD700', 'yellow', 4, 1),
+  ('#00B7C7', 'cyan', 4, 1),
+  ('#C71585', 'magenta', 4, 1),
+  ('#A0522D', 'brown', 4, 1),
+  ('#FFB6C1', 'pink', 4, 1),
+
+  ('#2A2A2A', 'black', 0, 2),
+  ('#F2F2F2', 'white', 0, 2),
+  ('#555555', 'gray', 1, 2),
+  ('#FF6666', 'red', 2, 2),
+  ('#66FF66', 'green', 2, 2),
+  ('#6666FF', 'blue', 2, 2),
+  ('#C77DFF', 'purple', 3, 2),
+  ('#CC6600', 'orange', 3, 2),
+  ('#FFF799', 'yellow', 4, 2),
+  ('#66FFFF', 'cyan', 4, 2),
+  ('#FF66CC', 'magenta', 4, 2),
+  ('#CD853F', 'brown', 4, 2),
+  ('#FF69B4', 'pink', 4, 2)
+ON CONFLICT (color_hex) DO UPDATE
+SET
+  color_family = EXCLUDED.color_family,
+  min_level = EXCLUDED.min_level,
+  shade_tier = EXCLUDED.shade_tier;

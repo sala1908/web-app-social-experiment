@@ -105,7 +105,7 @@ describe("Paint API", function () {
       y: 150,
       brushSize: 1,
       mode: "paint",
-      color: "#FF0000"
+      color: "#000000"
     };
 
     const res = await chai
@@ -117,7 +117,7 @@ describe("Paint API", function () {
     expect(res.body).to.have.property("ok").that.is.true;
     expect(res.body).to.have.property("modifiedPixels").that.is.an("array");
     expect(res.body.modifiedPixels).to.have.length(1);
-    expect(res.body.modifiedPixels[0]).to.include({ x: 100, y: 150, color_hex: "#FF0000" });
+    expect(res.body.modifiedPixels[0]).to.include({ x: 100, y: 150, color_hex: "#000000" });
     expect(res.body.modifiedPixels[0]).to.have.property("owner_tag");
 
     const { rows } = await pool.query(
@@ -125,7 +125,7 @@ describe("Paint API", function () {
       [100, 150]
     );
     expect(rows).to.have.length(1);
-    expect(rows[0].color_hex).to.equal("#FF0000");
+    expect(rows[0].color_hex).to.equal("#000000");
     expect(rows[0].owner_tag).to.be.a("string");
   });
 
@@ -154,7 +154,7 @@ describe("Paint API", function () {
         y: 211,
         brushSize: 1,
         mode: "paint",
-        color: "#00FF00"
+        color: "#000000"
       });
 
     expect(res).to.have.status(200);
@@ -176,7 +176,7 @@ describe("Paint API", function () {
       y: 500,
       brushSize: 1,
       mode: "paint",
-      color: "#00FF00"
+      color: "#000000"
     };
 
     const res = await chai
@@ -228,7 +228,7 @@ describe("Social interactions", function () {
           y: pixel.y,
           brushSize: 1,
           mode: "paint",
-          color: "#00FF00"
+          color: "#000000"
         });
 
       expect(paintResponse).to.have.status(200);
@@ -244,7 +244,7 @@ describe("Social interactions", function () {
         y: 641,
         brushSize: 1,
         mode: "paint",
-        color: "#FF0000"
+        color: "#FFFFFF"
       });
 
     expect(protectedGroupPaint).to.have.status(403);
@@ -354,5 +354,83 @@ describe("Social interactions", function () {
     );
 
     expect(rows.map((row) => row.interaction_type)).to.include.members(["like", "report", "friend", "love", "remove", "ban"]);
+  });
+});
+
+describe("Level palette and shade unlocks", function () {
+  this.timeout(15000);
+
+  it("returns 3-color level 0 palette for guests", async function () {
+    const res = await chai.request(globalServer).get("/api/palette");
+    expect(res).to.have.status(200);
+    expect(res.body).to.have.property("guest", true);
+
+    const colors = res.body.palette.map((entry) => entry.color_hex);
+    expect(colors).to.include.members(["#000000", "#FFFFFF", "#7F7F7F"]);
+    expect(colors).to.not.include("#FF0000");
+  });
+
+  it("unlocks level-based base colors and user-specific shades", async function () {
+    const ts = Date.now();
+    const password = "validpass123";
+    const agentA = chai.request.agent(globalServer);
+    const agentB = chai.request.agent(globalServer);
+
+    const emailA = `unlock_a_${ts}@example.com`;
+    const userA = `unlock_a_${ts}`;
+    const emailB = `unlock_b_${ts}@example.com`;
+    const userB = `unlock_b_${ts}`;
+
+    await agentA.post("/auth/register").type("form").send({ email: emailA, username: userA, password });
+    await agentB.post("/auth/register").type("form").send({ email: emailB, username: userB, password });
+
+    const rowA = await pool.query("SELECT id FROM users WHERE email = $1", [emailA]);
+    const rowB = await pool.query("SELECT id FROM users WHERE email = $1", [emailB]);
+
+    await pool.query("UPDATE users SET level = 4 WHERE id IN ($1, $2)", [rowA.rows[0].id, rowB.rows[0].id]);
+
+    const beforeUnlockA = await agentA.get("/api/palette");
+    expect(beforeUnlockA).to.have.status(200);
+    const baseColorsA = beforeUnlockA.body.palette.map((entry) => entry.color_hex);
+    expect(baseColorsA).to.include.members(["#FF0000", "#00FF00", "#0000FF", "#800080", "#FF7F00", "#FFFF00"]);
+    expect(baseColorsA).to.not.include("#CC0000");
+
+    const unlockResponse = await agentA.post("/api/palette/unlock-next");
+    expect(unlockResponse).to.have.status(200);
+    expect(unlockResponse.body).to.have.property("ok", true);
+    expect(unlockResponse.body).to.have.property("nextShadeTier", 1);
+    expect(unlockResponse.body.unlockedColors).to.include("#CC0000");
+
+    const afterUnlockA = await agentA.get("/api/palette");
+    const colorsAfterUnlockA = afterUnlockA.body.palette.map((entry) => entry.color_hex);
+    expect(colorsAfterUnlockA).to.include("#CC0000");
+
+    const userBPalette = await agentB.get("/api/palette");
+    const colorsB = userBPalette.body.palette.map((entry) => entry.color_hex);
+    expect(colorsB).to.not.include("#CC0000");
+
+    agentA.close();
+    agentB.close();
+  });
+
+  it("gives admin all colors without manual unlocks", async function () {
+    const adminAgent = chai.request.agent(globalServer);
+
+    await adminAgent
+      .post("/auth/login")
+      .type("form")
+      .send({ email: "admin", password: "12345678" });
+
+    const paletteRes = await adminAgent.get("/api/palette");
+    expect(paletteRes).to.have.status(200);
+    const adminColors = paletteRes.body.palette.map((entry) => entry.color_hex);
+    expect(adminColors).to.include.members(["#000000", "#FF0000", "#CC0000", "#66FF66", "#FF69B4"]);
+
+    const unlockRes = await adminAgent.post("/api/palette/unlock-next");
+    expect(unlockRes).to.have.status(200);
+    expect(unlockRes.body).to.have.property("ok", true);
+    expect(unlockRes.body).to.have.property("nextShadeTier", null);
+
+    adminAgent.close();
   });
 });

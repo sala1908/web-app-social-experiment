@@ -9,13 +9,63 @@ function isHexColor(color) {
   return /^#[0-9A-F]{6}$/i.test(color || "");
 }
 
-async function getAllowedColors(dbClient) {
+function normalizeLevel(level) {
+  const parsed = Number(level);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return 0;
+  }
+
+  return Math.floor(parsed);
+}
+
+async function getPaletteRowsForViewer(dbClient, { userId, isAdmin, userLevel }) {
+  if (isAdmin) {
+    const { rows } = await dbClient.query(
+      `
+        SELECT color_hex, 'admin' AS scope, min_level, shade_tier
+        FROM level_palette_colors
+        ORDER BY min_level ASC, shade_tier ASC, color_hex ASC
+      `
+    );
+    return rows;
+  }
+
+  if (!userId) {
+    const { rows } = await dbClient.query(
+      `
+        SELECT color_hex, 'level' AS scope, min_level, shade_tier
+        FROM level_palette_colors
+        WHERE min_level <= 0 AND shade_tier = 0
+        ORDER BY min_level ASC, shade_tier ASC, color_hex ASC
+      `
+    );
+    return rows;
+  }
+
+  const safeLevel = normalizeLevel(userLevel);
   const { rows } = await dbClient.query(
     `
-      SELECT color_hex FROM default_palette
+      SELECT
+        lpc.color_hex,
+        CASE WHEN lpc.shade_tier = 0 THEN 'level' ELSE 'unlocked' END AS scope,
+        lpc.min_level,
+        lpc.shade_tier
+      FROM level_palette_colors lpc
+      LEFT JOIN user_palette_unlocks upu
+        ON upu.color_hex = lpc.color_hex AND upu.user_id = $1
+      WHERE lpc.min_level <= $2
+        AND (lpc.shade_tier = 0 OR upu.user_id IS NOT NULL)
+      ORDER BY lpc.min_level ASC, lpc.shade_tier ASC, lpc.color_hex ASC
     `
+    ,
+    [userId, safeLevel]
   );
 
+  return rows;
+}
+
+async function getAllowedColors(dbClient, { userId, isAdmin, userLevel }) {
+  const rows = await getPaletteRowsForViewer(dbClient, { userId, isAdmin, userLevel });
   return new Set(rows.map((row) => row.color_hex.toUpperCase()));
 }
 
@@ -377,45 +427,106 @@ router.get("/me/limits", requireAuth, async (req, res, next) => {
 });
 
 router.get("/palette", async (req, res, next) => {
-  if (req.session && req.session.isAdmin) {
-    try {
-      const { rows } = await pool.query(
-        `
-          SELECT color_hex, 'default' AS scope FROM default_palette
-          ORDER BY color_hex ASC
-        `
-      );
-      return res.json({ palette: rows });
-    } catch (error) {
-      return next(error);
-    }
-  }
-
-  if (!req.session || !req.session.userId) {
-    try {
-      const { rows } = await pool.query(
-        `
-          SELECT color_hex, 'default' AS scope FROM default_palette
-          ORDER BY color_hex ASC
-        `
-      );
-      return res.json({ palette: rows, guest: true });
-    } catch (error) {
-      return next(error);
-    }
-  }
-
   try {
-    const { rows } = await pool.query(
-      `
-        SELECT color_hex, 'default' AS scope FROM default_palette
-        ORDER BY color_hex ASC
-      `
-    );
+    const isAdmin = Boolean(req.session && req.session.isAdmin);
+    const userId = req.session && req.session.userId ? req.session.userId : null;
+    const rows = await getPaletteRowsForViewer(pool, {
+      userId,
+      isAdmin,
+      userLevel: req.user ? req.user.level : 0
+    });
 
-    return res.json({ palette: rows });
+    return res.json({
+      palette: rows,
+      guest: !isAdmin && !userId,
+      admin: isAdmin
+    });
   } catch (error) {
     return next(error);
+  }
+});
+
+router.post("/palette/unlock-next", requireAuth, async (req, res, next) => {
+  if (req.session && req.session.isAdmin) {
+    try {
+      const palette = await getPaletteRowsForViewer(pool, { userId: null, isAdmin: true, userLevel: 999 });
+      return res.json({
+        ok: true,
+        unlockedColors: [],
+        nextShadeTier: null,
+        palette,
+        message: "Admin already has all colors unlocked."
+      });
+    } catch (error) {
+      return next(error);
+    }
+  }
+
+  const userId = req.session && req.session.userId ? req.session.userId : null;
+  if (!userId) {
+    return res.status(400).json({ error: "User context is missing." });
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+
+    const { rows: userRows } = await client.query("SELECT level FROM users WHERE id = $1", [userId]);
+    if (userRows.length === 0) {
+      await client.query("ROLLBACK");
+      return res.status(404).json({ error: "User not found." });
+    }
+
+    const userLevel = normalizeLevel(userRows[0].level);
+    const { rows: nextTierRows } = await client.query(
+      `
+        SELECT MIN(lpc.shade_tier)::int AS next_tier
+        FROM level_palette_colors lpc
+        LEFT JOIN user_palette_unlocks upu
+          ON upu.color_hex = lpc.color_hex AND upu.user_id = $1
+        WHERE lpc.shade_tier > 0
+          AND lpc.min_level <= $2
+          AND upu.user_id IS NULL
+      `,
+      [userId, userLevel]
+    );
+
+    const nextTier = nextTierRows[0] ? nextTierRows[0].next_tier : null;
+    if (nextTier === null) {
+      await client.query("COMMIT");
+      const palette = await getPaletteRowsForViewer(client, { userId, isAdmin: false, userLevel });
+      return res.json({ ok: true, unlockedColors: [], nextShadeTier: null, palette });
+    }
+
+    const { rows: insertedRows } = await client.query(
+      `
+        INSERT INTO user_palette_unlocks (user_id, color_hex)
+        SELECT $1, lpc.color_hex
+        FROM level_palette_colors lpc
+        LEFT JOIN user_palette_unlocks upu
+          ON upu.color_hex = lpc.color_hex AND upu.user_id = $1
+        WHERE lpc.shade_tier = $2
+          AND lpc.min_level <= $3
+          AND upu.user_id IS NULL
+        RETURNING color_hex
+      `,
+      [userId, nextTier, userLevel]
+    );
+
+    const palette = await getPaletteRowsForViewer(client, { userId, isAdmin: false, userLevel });
+    await client.query("COMMIT");
+
+    return res.json({
+      ok: true,
+      unlockedColors: insertedRows.map((row) => row.color_hex).sort(),
+      nextShadeTier: nextTier,
+      palette
+    });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    return next(error);
+  } finally {
+    client.release();
   }
 });
 
@@ -473,7 +584,11 @@ router.post("/paint", async (req, res, next) => {
       }
     }
 
-    const allowedColors = await getAllowedColors(client);
+    const allowedColors = await getAllowedColors(client, {
+      userId,
+      isAdmin: Boolean(req.session && req.session.isAdmin),
+      userLevel: req.user ? req.user.level : 0
+    });
     const color = rawColor.toUpperCase();
 
     if (mode === "paint" && !allowedColors.has(color)) {
