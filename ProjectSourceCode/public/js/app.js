@@ -9,8 +9,15 @@
   const pixelCountEl = document.getElementById("pixel-count");
   const usageEl = document.getElementById("usage");
   const paletteEl = document.getElementById("palette");
+  const paletteSelectorEl = document.getElementById("palette-selector");
   const brushInput = document.getElementById("brush-size");
   const brushLabel = document.getElementById("brush-size-label");
+  const openPaletteStoreBtn = document.getElementById("open-palette-store");
+  const paletteStoreBackdrop = document.getElementById("palette-store-backdrop");
+  const paletteStoreModal = document.getElementById("palette-store-modal");
+  const paletteStoreSummary = document.getElementById("palette-store-summary");
+  const paletteStoreGrid = document.getElementById("palette-store-grid");
+  const paletteStoreClose = document.getElementById("palette-store-close");
   const interactionBackdrop = document.getElementById("interaction-backdrop");
   const interactionModal = document.getElementById("interaction-modal");
   const interactionTitle = document.getElementById("interaction-title");
@@ -50,6 +57,8 @@
     normalized.xp = Number.isFinite(parsedXp) && parsedXp >= 0
       ? Math.floor(parsedXp)
       : 0;
+    normalized.palette_tokens = Math.max(0, Number(normalized.palette_tokens) || 0);
+    normalized.selected_palette_id = String(normalized.selected_palette_id || "starter_classic");
 
     return normalized;
   }
@@ -100,7 +109,12 @@
     hoveredGroup: null,
     interactionGroup: null,
     groups: [],
-    playerColors: {} // Map of player tags to colors
+    playerColors: {}, // Map of player tags to colors
+    selectedPaletteId: "starter_classic",
+    selectedPaletteName: "Starter Classic",
+    unlockedPaletteIds: ["starter_classic"],
+    availablePalettes: [],
+    paletteStoreItems: []
   };
 
   let socket = null;
@@ -141,18 +155,20 @@
 
     const level = Number(currentUser && currentUser.level);
     const xp = Number(currentUser && currentUser.xp);
+    const paletteTokens = Number(currentUser && currentUser.palette_tokens);
     const hasProgress = Number.isFinite(level) && Number.isFinite(xp);
+    const tokenText = Number.isFinite(paletteTokens) ? ` | Tokens ${Math.max(0, paletteTokens)}` : "";
 
     if (typeof state.remainingPaints === "number") {
       pixelCountEl.textContent = `Pixels left today: ${state.remainingPaints}`;
       usageEl.textContent = hasProgress
-        ? `Level ${Math.max(0, level)} | XP ${Math.max(0, xp)} | Paints remaining today: ${state.remainingPaints}`
+        ? `Level ${Math.max(0, level)} | XP ${Math.max(0, xp)}${tokenText} | Paints remaining today: ${state.remainingPaints}`
         : `Paints remaining today: ${state.remainingPaints}`;
       return;
     }
 
     usageEl.textContent = hasProgress
-      ? `Level ${Math.max(0, level)} | XP ${Math.max(0, xp)}`
+      ? `Level ${Math.max(0, level)} | XP ${Math.max(0, xp)}${tokenText}`
       : "Paint mode: ready.";
   }
 
@@ -874,11 +890,163 @@
     }
 
     const payload = await response.json();
-    state.palette = payload.palette;
-    if (state.palette.length > 0) {
-      state.activeColor = state.palette[0].color_hex.toUpperCase();
+    state.palette = Array.isArray(payload.palette) ? payload.palette : [];
+    state.selectedPaletteId = String(payload.selectedPaletteId || "starter_classic");
+    state.selectedPaletteName = String(payload.selectedPaletteName || "Starter Classic");
+    state.unlockedPaletteIds = Array.isArray(payload.unlockedPaletteIds) ? payload.unlockedPaletteIds : ["starter_classic"];
+    state.availablePalettes = Array.isArray(payload.availablePalettes) ? payload.availablePalettes : [];
+
+    if (currentUser && Number.isFinite(Number(payload.paletteTokens))) {
+      currentUser.palette_tokens = Number(payload.paletteTokens);
+      currentUser.selected_palette_id = state.selectedPaletteId;
     }
+
+    if (state.palette.length > 0) {
+      const paletteHasActive = state.palette.some((entry) => String(entry.color_hex || "").toUpperCase() === state.activeColor.toUpperCase());
+      if (!paletteHasActive) {
+        state.activeColor = state.palette[0].color_hex.toUpperCase();
+      }
+    }
+
+    renderPaletteSelector();
     renderPalette();
+    updateUsage();
+  }
+
+  function renderPaletteSelector() {
+    if (!paletteSelectorEl) {
+      return;
+    }
+
+    paletteSelectorEl.innerHTML = "";
+    const unlocked = new Set(state.unlockedPaletteIds || []);
+    const choices = (state.availablePalettes || []).filter((item) => unlocked.has(item.paletteId) || isAdmin);
+
+    choices.forEach((item) => {
+      const option = document.createElement("option");
+      option.value = item.paletteId;
+      option.textContent = item.name;
+      paletteSelectorEl.appendChild(option);
+    });
+
+    paletteSelectorEl.value = state.selectedPaletteId;
+    paletteSelectorEl.disabled = !authenticated;
+  }
+
+  async function loadPaletteStore() {
+    const response = await fetch("/api/palette/store", { cache: "no-store" });
+    if (!response.ok) {
+      setStatus("Unable to load palette store.", true);
+      return null;
+    }
+
+    const payload = await response.json();
+    state.paletteStoreItems = Array.isArray(payload.items) ? payload.items : [];
+
+    if (currentUser && Number.isFinite(Number(payload.tokens))) {
+      currentUser.palette_tokens = Number(payload.tokens);
+    }
+
+    renderPaletteStore(payload);
+    updateUsage();
+    return payload;
+  }
+
+  function renderPaletteStore(storePayload) {
+    if (!paletteStoreGrid || !paletteStoreSummary) {
+      return;
+    }
+
+    const payload = storePayload || { tokens: 0, items: [] };
+    const tokens = Math.max(0, Number(payload.tokens) || 0);
+    paletteStoreSummary.textContent = authenticated
+      ? `You have ${tokens} level-up token${tokens === 1 ? "" : "s"}. Unlock a palette now or save tokens for later.`
+      : "Log in to unlock palettes with level-up tokens.";
+
+    paletteStoreGrid.innerHTML = "";
+    payload.items.forEach((item) => {
+      const card = document.createElement("article");
+      card.className = "palette-store-item";
+
+      const preview = (item.colors || []).map((color) => `<span class="palette-store-swatch" style="background:${color}"></span>`).join("");
+      const buttonLabel = item.selected
+        ? "Selected"
+        : item.unlocked
+          ? "Select Palette"
+          : "Unlock (1 token)";
+
+      card.innerHTML = `
+        <h3>${item.name}</h3>
+        <p>${item.description || ""}</p>
+        <div class="palette-store-preview">${preview}</div>
+        <button type="button" data-palette-action="${item.unlocked ? "select" : "unlock"}" data-palette-id="${item.paletteId}">${buttonLabel}</button>
+      `;
+
+      const button = card.querySelector("button");
+      if (button) {
+        button.disabled = item.selected || (!item.unlocked && !item.canUnlock);
+      }
+
+      paletteStoreGrid.appendChild(card);
+    });
+  }
+
+  function openPaletteStore() {
+    if (!paletteStoreBackdrop || !paletteStoreModal) {
+      return;
+    }
+
+    paletteStoreBackdrop.hidden = false;
+    paletteStoreModal.hidden = false;
+    paletteStoreModal.setAttribute("aria-hidden", "false");
+    void loadPaletteStore();
+  }
+
+  function closePaletteStore() {
+    if (!paletteStoreBackdrop || !paletteStoreModal) {
+      return;
+    }
+
+    paletteStoreBackdrop.hidden = true;
+    paletteStoreModal.hidden = true;
+    paletteStoreModal.setAttribute("aria-hidden", "true");
+  }
+
+  async function selectPalette(paletteId) {
+    const response = await fetch("/api/palette/select", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ paletteId })
+    });
+
+    const payload = await response.json();
+    if (!response.ok) {
+      setStatus(payload.error || "Unable to select palette.", true);
+      return false;
+    }
+
+    await loadPalette();
+    setStatus(`Selected palette: ${payload.selectedPaletteName || paletteId}.`);
+    return true;
+  }
+
+  async function unlockPalette(paletteId) {
+    const response = await fetch("/api/palette/store/unlock", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ paletteId })
+    });
+
+    const payload = await response.json();
+    if (!response.ok) {
+      setStatus(payload.error || "Unable to unlock palette.", true);
+      return false;
+    }
+
+    await loadPalette();
+    await loadPaletteStore();
+    setStatus("Palette unlocked. You can select it from the store or the palette menu.");
+    return true;
   }
 
   async function loadLimits() {
@@ -960,6 +1128,18 @@
       if (currentUser && Number.isFinite(Number(payload.xp)) && Number.isFinite(Number(payload.level))) {
         currentUser.xp = Number(payload.xp);
         currentUser.level = Number(payload.level);
+        if (Number.isFinite(Number(payload.paletteTokens))) {
+          currentUser.palette_tokens = Number(payload.paletteTokens);
+        }
+        if (payload.selectedPaletteId) {
+          currentUser.selected_palette_id = String(payload.selectedPaletteId);
+        }
+      }
+
+      const levelsGained = Number(payload.levelsGained || 0);
+      const tokensGained = Number(payload.tokensGained || 0);
+      if (levelsGained > 0 && tokensGained > 0 && authenticated && !isAdmin) {
+        window.alert(`Level up! You gained ${tokensGained} level-up token${tokensGained === 1 ? "" : "s"}. Open the Palette Store to unlock a new palette, or save tokens for later.`);
       }
       applyModifiedPixels(payload.modifiedPixels);
       updateUsage();
@@ -1184,6 +1364,63 @@
         }
 
         setStatus("Daily limits reset.");
+      });
+    }
+
+    if (paletteSelectorEl) {
+      paletteSelectorEl.addEventListener("change", async () => {
+        const nextPalette = String(paletteSelectorEl.value || "").trim();
+        if (!nextPalette) {
+          return;
+        }
+        const selected = await selectPalette(nextPalette);
+        if (!selected) {
+          await loadPalette();
+        }
+      });
+    }
+
+    if (openPaletteStoreBtn) {
+      openPaletteStoreBtn.addEventListener("click", () => {
+        if (!authenticated) {
+          setStatus("Log in to unlock and choose palettes.", true);
+        }
+        openPaletteStore();
+      });
+    }
+
+    if (paletteStoreBackdrop) {
+      paletteStoreBackdrop.addEventListener("click", closePaletteStore);
+    }
+
+    if (paletteStoreClose) {
+      paletteStoreClose.addEventListener("click", closePaletteStore);
+    }
+
+    if (paletteStoreGrid) {
+      paletteStoreGrid.addEventListener("click", async (event) => {
+        const button = event.target.closest("button[data-palette-id]");
+        if (!button) {
+          return;
+        }
+
+        const paletteId = button.getAttribute("data-palette-id");
+        const action = button.getAttribute("data-palette-action");
+        if (!paletteId || !action) {
+          return;
+        }
+
+        if (action === "unlock") {
+          await unlockPalette(paletteId);
+          return;
+        }
+
+        if (action === "select") {
+          const ok = await selectPalette(paletteId);
+          if (ok) {
+            await loadPaletteStore();
+          }
+        }
       });
     }
 

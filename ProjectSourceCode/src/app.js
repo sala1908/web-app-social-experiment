@@ -71,6 +71,8 @@ function createApp() {
         displayName: "admin",
         xp: 0,
         level: 0,
+        palette_tokens: 999,
+        selected_palette_id: req.session.adminPaletteId || "starter_classic",
         isAdmin: true
       };
       res.locals.currentUser = req.user;
@@ -82,7 +84,7 @@ function createApp() {
     }
 
     try {
-      const { rows } = await pool.query("SELECT id, email, username, xp, level FROM users WHERE id = $1", [req.session.userId]);
+      const { rows } = await pool.query("SELECT id, email, username, xp, level, palette_tokens, selected_palette_id FROM users WHERE id = $1", [req.session.userId]);
       req.user = rows[0]
         ? {
             ...rows[0],

@@ -3,6 +3,7 @@
     <h1><a class="home-link" href="/">Web-E-Vil</a></h1>
     <div class="auth-block">
       <a href="/" class="home-button">Home</a>
+      <button type="button" id="open-palette-store" class="home-button">Palette Store</button>
       {{#if isAuthenticated}}
         <span class="user-email">{{#if user.displayName}}{{user.displayName}}{{else}}{{user.email}}{{/if}}</span>
         <form method="POST" action="/auth/logout">
@@ -23,6 +24,11 @@
       Brush
       <input id="brush-size" type="range" min="1" max="{{appConfig.maxBrushSize}}" value="1" />
       <span id="brush-size-label">1</span>
+    </label>
+
+    <label>
+      Palette
+      <select id="palette-selector"></select>
     </label>
 
     {{#if isAdmin}}
@@ -64,6 +70,17 @@
         <a href="/register">Register</a>
       </div>
       <button type="button" id="interaction-close" class="interaction-close">Close</button>
+    </div>
+  </section>
+
+  <div id="palette-store-backdrop" class="interaction-backdrop" hidden></div>
+  <section id="palette-store-modal" class="interaction-modal" aria-hidden="true" hidden>
+    <div class="interaction-card palette-store-card">
+      <p class="interaction-kicker">Store</p>
+      <h2>Palette Store</h2>
+      <p id="palette-store-summary" class="interaction-summary"></p>
+      <div id="palette-store-grid" class="palette-store-grid"></div>
+      <button type="button" id="palette-store-close" class="interaction-close">Close</button>
     </div>
   </section>
 

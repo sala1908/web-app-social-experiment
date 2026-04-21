@@ -63,6 +63,14 @@ body {
   cursor: pointer;
 }
 
+#palette-selector {
+  min-width: 170px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: #fff;
+}
+
 .home-button {
   display: inline-flex;
   align-items: center;
@@ -256,6 +264,58 @@ body {
 .interaction-close {
   margin-top: 12px;
   width: 100%;
+}
+
+.palette-store-card {
+  width: min(760px, calc(100vw - 24px));
+  max-height: calc(100vh - 36px);
+  overflow: auto;
+}
+
+.palette-store-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 10px;
+}
+
+.palette-store-item {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
+  padding: 10px;
+}
+
+.palette-store-item h3 {
+  margin: 0 0 4px;
+  font-size: 0.95rem;
+}
+
+.palette-store-preview {
+  display: flex;
+  gap: 4px;
+  margin: 8px 0;
+}
+
+.palette-store-swatch {
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  border: 1px solid #00000020;
+}
+
+.palette-store-item button {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: linear-gradient(180deg, #fff 0%, #f4ead8 100%);
+  padding: 8px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.palette-store-item button:disabled {
+  opacity: 0.6;
+  cursor: default;
 }
 
 .status {
