@@ -73,6 +73,6 @@
 <script>
   window.APP_CONFIG = {{json appConfig}};
   window.APP_USER = {{json user}};
-  window.APP_AUTHENTICATED = {{#if isAuthenticated}}true{{else}}false{{/if}};
-  window.APP_IS_ADMIN = {{#if isAdmin}}true{{else}}false{{/if}};
+  window.APP_AUTHENTICATED = {{json isAuthenticated}};
+  window.APP_IS_ADMIN = {{json isAdmin}};
 </script>

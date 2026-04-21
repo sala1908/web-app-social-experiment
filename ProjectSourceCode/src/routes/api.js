@@ -864,7 +864,9 @@ router.post("/interactions", requireAuth, async (req, res, next) => {
     }
 
     if (!actorIsAdmin && interactionType === "remove" && targetUserId !== null) {
-      // Remove now means removing an owned bubble.
+      // For non-admin users, "remove" only applies to the actor's own owned bubble.
+      // Record the actor as the interaction target so the saved interaction reflects
+      // that the removal was against the actor-owned bubble, not the clicked user.
       interactionTargetUserId = actorUserId;
     }
 
