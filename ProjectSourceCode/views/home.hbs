@@ -84,6 +84,20 @@
     </div>
   </section>
 
+  <div id="guest-paint-backdrop" class="interaction-backdrop" hidden></div>
+  <section id="guest-paint-modal" class="interaction-modal" aria-hidden="true" hidden>
+    <div class="interaction-card guest-paint-card">
+      <p class="interaction-kicker">Login Required</p>
+      <h2>Sign in to paint</h2>
+      <p class="interaction-summary">Guest browsing is allowed, but drawing is only available to logged-in users.</p>
+      <div class="interaction-auth-links guest-paint-links">
+        <a href="/login">Login</a>
+        <a href="/register">Register</a>
+      </div>
+      <button type="button" id="guest-paint-close" class="interaction-close">Close</button>
+    </div>
+  </section>
+
   <p id="status" class="status"></p>
 </main>
 

@@ -723,6 +723,11 @@ router.post("/paint", async (req, res, next) => {
       : "Guest";
   const isGuest = !userId && !(req.session && req.session.isAdmin);
   const actorOwnershipKey = getOwnershipKey(userId, ownerTag, Boolean(req.session && req.session.isAdmin));
+  
+  if (isGuest) {
+    return res.status(403).json({ error: "You must be logged in to paint." });
+  }
+  
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
@@ -733,12 +738,6 @@ router.post("/paint", async (req, res, next) => {
       if (remaining <= 0) {
         await client.query("ROLLBACK");
         return res.status(429).json({ error: "Daily paint limit reached.", dailyMaxPaints: DAILY_MAX_PAINTS, remainingPaints: 0 });
-      }
-    } else if (isGuest) {
-      remaining = getGuestRemainingPaints(req.session);
-      if (remaining <= 0) {
-        await client.query("ROLLBACK");
-        return res.status(429).json({ error: "Guest paint limit reached.", dailyMaxPaints: GUEST_MAX_PAINTS, remainingPaints: 0 });
       }
     }
 
@@ -791,8 +790,6 @@ router.post("/paint", async (req, res, next) => {
 
     if (userId) {
       await client.query("INSERT INTO paint_actions (user_id) VALUES ($1)", [userId]);
-    } else if (isGuest) {
-      req.session.guestPaintsRemaining = Math.max(0, remaining - 1);
     }
 
     const modifiedPixels = [];

@@ -18,6 +18,9 @@
   const paletteStoreSummary = document.getElementById("palette-store-summary");
   const paletteStoreGrid = document.getElementById("palette-store-grid");
   const paletteStoreClose = document.getElementById("palette-store-close");
+  const guestPaintBackdrop = document.getElementById("guest-paint-backdrop");
+  const guestPaintModal = document.getElementById("guest-paint-modal");
+  const guestPaintClose = document.getElementById("guest-paint-close");
   const interactionBackdrop = document.getElementById("interaction-backdrop");
   const interactionModal = document.getElementById("interaction-modal");
   const interactionTitle = document.getElementById("interaction-title");
@@ -138,6 +141,27 @@
     statusEl.style.color = isError ? "#b42318" : "#3f6b38";
   }
 
+  function openGuestPaintModal() {
+    if (!guestPaintBackdrop || !guestPaintModal) {
+      setStatus("You must be logged in to paint.", true);
+      return;
+    }
+
+    guestPaintBackdrop.hidden = false;
+    guestPaintModal.hidden = false;
+    guestPaintModal.setAttribute("aria-hidden", "false");
+  }
+
+  function closeGuestPaintModal() {
+    if (!guestPaintBackdrop || !guestPaintModal) {
+      return;
+    }
+
+    guestPaintBackdrop.hidden = true;
+    guestPaintModal.hidden = true;
+    guestPaintModal.setAttribute("aria-hidden", "true");
+  }
+
   function updateUsage() {
     if (isAdmin) {
       pixelCountEl.textContent = "Pixels left: unlimited";
@@ -149,7 +173,7 @@
       pixelCountEl.textContent = typeof state.remainingPaints === "number"
         ? `Pixels left today: ${state.remainingPaints}`
         : "Pixels left today: ...";
-      usageEl.textContent = "Guest mode: painting enabled.";
+      usageEl.textContent = "Guest mode: login required to paint.";
       return;
     }
 
@@ -1088,6 +1112,11 @@
   }
 
   async function enqueuePaint(x, y) {
+     if (!authenticated) {
+      openGuestPaintModal();
+       return;
+     }
+
     const brushSize = state.brushSize;
     const paintMode = state.mode;
     const paintColor = state.activeColor;
@@ -1395,6 +1424,10 @@
 
     if (paletteStoreClose) {
       paletteStoreClose.addEventListener("click", closePaletteStore);
+    }
+
+    if (guestPaintClose) {
+      guestPaintClose.addEventListener("click", closeGuestPaintModal);
     }
 
     if (paletteStoreGrid) {

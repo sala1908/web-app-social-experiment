@@ -266,6 +266,14 @@ body {
   width: 100%;
 }
 
+.guest-paint-card {
+  width: min(460px, calc(100vw - 24px));
+}
+
+.guest-paint-links {
+  display: flex;
+}
+
 .palette-store-card {
   width: min(760px, calc(100vw - 24px));
   max-height: calc(100vh - 36px);
