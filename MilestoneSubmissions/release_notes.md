@@ -17,3 +17,12 @@ Sam:
 - Added 'bulk paint' feature so drawing a line does not have trailing effect. 
 - Erasing, and double painting no longer decrement pixel count. 
 - Merged react feature with main branch. 
+
+## Final week (v1.0)
+Sam: 
+- Added XP system.
+- Added 'palette store'
+- Added tokens, awarded for leveling up. 
+- Reworked UI to include palette choice. 
+Denys: 
+- Implemented cloud hosting. 
