@@ -21,8 +21,11 @@
   const openTutorialBtn = document.getElementById("open-tutorial");
   const tutorialBackdrop = document.getElementById("tutorial-backdrop");
   const tutorialModal = document.getElementById("tutorial-modal");
-  const tutorialTokenSummary = document.getElementById("tutorial-token-summary");
   const tutorialClose = document.getElementById("tutorial-close");
+  const paletteTutorialBackdrop = document.getElementById("palette-tutorial-backdrop");
+  const paletteTutorialModal = document.getElementById("palette-tutorial-modal");
+  const paletteTutorialSummary = document.getElementById("palette-tutorial-summary");
+  const paletteTutorialClose = document.getElementById("palette-tutorial-close");
   const guestPaintBackdrop = document.getElementById("guest-paint-backdrop");
   const guestPaintModal = document.getElementById("guest-paint-modal");
   const guestPaintClose = document.getElementById("guest-paint-close");
@@ -1185,13 +1188,26 @@
     return "You have no tokens right now. Keep painting to level up and unlock more palettes.";
   }
 
+  function getPaletteTutorialSummary() {
+    if (!authenticated || !currentUser) {
+      return "Log in to paint and earn level-up tokens you can spend to unlock new color palettes.";
+    }
+
+    const tokens = Math.max(0, Number(currentUser.palette_tokens) || 0);
+    if (tokens === 1) {
+      return "You have 1 level-up token to use right now. Unlock a new palette and start drawing with fresh colors!";
+    }
+
+    if (tokens > 1) {
+      return `You have ${tokens} level-up tokens ready to spend. Check out the Palette Store to unlock new color combinations!`;
+    }
+
+    return "You have no tokens right now. Keep painting to level up and earn more tokens!";
+  }
+
   function openTutorialModal(markSeen = true) {
     if (!tutorialBackdrop || !tutorialModal) {
       return;
-    }
-
-    if (tutorialTokenSummary) {
-      tutorialTokenSummary.textContent = getTutorialTokenSummary();
     }
 
     tutorialBackdrop.hidden = false;
@@ -1208,6 +1224,20 @@
     }
   }
 
+  function openPaletteTutorialModal() {
+    if (!paletteTutorialBackdrop || !paletteTutorialModal) {
+      return;
+    }
+
+    if (paletteTutorialSummary) {
+      paletteTutorialSummary.textContent = getPaletteTutorialSummary();
+    }
+
+    paletteTutorialBackdrop.hidden = false;
+    paletteTutorialModal.hidden = false;
+    paletteTutorialModal.setAttribute("aria-hidden", "false");
+  }
+
   function closeTutorialModal() {
     if (!tutorialBackdrop || !tutorialModal) {
       return;
@@ -1216,6 +1246,16 @@
     tutorialBackdrop.hidden = true;
     tutorialModal.hidden = true;
     tutorialModal.setAttribute("aria-hidden", "true");
+  }
+
+  function closePaletteTutorialModal() {
+    if (!paletteTutorialBackdrop || !paletteTutorialModal) {
+      return;
+    }
+
+    paletteTutorialBackdrop.hidden = true;
+    paletteTutorialModal.hidden = true;
+    paletteTutorialModal.setAttribute("aria-hidden", "true");
   }
 
   function maybeOpenFirstStartTutorial() {
@@ -1651,9 +1691,27 @@
       tutorialClose.addEventListener("click", closeTutorialModal);
     }
 
+    if (paletteTutorialModal) {
+      const openPaletteTutorialBtn = document.getElementById("open-palette-tutorial");
+      if (openPaletteTutorialBtn) {
+        openPaletteTutorialBtn.addEventListener("click", openPaletteTutorialModal);
+      }
+    }
+
+    if (paletteTutorialBackdrop) {
+      paletteTutorialBackdrop.addEventListener("click", closePaletteTutorialModal);
+    }
+
+    if (paletteTutorialClose) {
+      paletteTutorialClose.addEventListener("click", closePaletteTutorialModal);
+    }
+
     window.addEventListener("keydown", (event) => {
       if (event.key === "Escape" && tutorialModal && !tutorialModal.hidden) {
         closeTutorialModal();
+      }
+      if (event.key === "Escape" && paletteTutorialModal && !paletteTutorialModal.hidden) {
+        closePaletteTutorialModal();
       }
     });
 

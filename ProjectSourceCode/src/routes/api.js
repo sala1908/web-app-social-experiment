@@ -182,12 +182,13 @@ async function buildPaletteResponse(dbClient, req) {
 
 async function getRemainingPaints(client, userId) {
   const { rows: userRows } = await client.query(
-    "SELECT level FROM users WHERE id = $1",
+    "SELECT level, daily_limit_override FROM users WHERE id = $1",
     [userId]
   );
 
-  const currentLevel = normalizeLevel(userRows[0] ? userRows[0].level : 0);
-  const dailyMaxPaints = getDailyPaintLimit(currentLevel);
+  const user = userRows[0];
+  const currentLevel = normalizeLevel(user ? user.level : 0);
+  const dailyMaxPaints = user?.daily_limit_override !== null ? user.daily_limit_override : getDailyPaintLimit(currentLevel);
   const { rows } = await client.query(
     `
       SELECT COUNT(*)::int AS paints_today
@@ -885,21 +886,21 @@ router.post("/paint", async (req, res, next) => {
               level = $3,
               palette_tokens = palette_tokens + $4
             WHERE id = $1
-            RETURNING xp, level, palette_tokens, selected_palette_id
+            RETURNING xp, level, palette_tokens, selected_palette_id, daily_limit_override
           `,
           [userId, nextXp, nextLevel, tokensGained]
         );
 
         userProgress = rows[0] || null;
       } else {
-        const { rows } = await client.query("SELECT xp, level, palette_tokens, selected_palette_id FROM users WHERE id = $1", [userId]);
+        const { rows } = await client.query("SELECT xp, level, palette_tokens, selected_palette_id, daily_limit_override FROM users WHERE id = $1", [userId]);
         userProgress = rows[0] || null;
       }
     }
 
     await client.query("COMMIT");
 
-    const nextDailyMaxPaints = userProgress ? getDailyPaintLimit(userProgress.level) : limitInfo ? limitInfo.dailyMaxPaints : null;
+    const nextDailyMaxPaints = userProgress ? (userProgress.daily_limit_override !== null ? userProgress.daily_limit_override : getDailyPaintLimit(userProgress.level)) : limitInfo ? limitInfo.dailyMaxPaints : null;
     const nextRemaining = limitInfo
       ? Math.max(0, nextDailyMaxPaints - (limitInfo.paintsToday + 1))
       : null;
@@ -1318,6 +1319,255 @@ router.post("/admin/reset-daily-limit", requireAdmin, async (req, res, next) => 
     );
 
     return res.json({ ok: true, clearedActions: rowCount });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+// Admin user management endpoints
+
+router.get("/admin/users", requireAdmin, async (req, res, next) => {
+  try {
+    const { rows: users } = await pool.query(
+      `SELECT id, email, username, xp, level, palette_tokens, banned, daily_limit_override, created_at 
+       FROM users 
+       ORDER BY created_at DESC`
+    );
+
+    return res.json({ ok: true, users });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+router.post("/admin/users/:userId/ban", requireAdmin, async (req, res, next) => {
+  try {
+    const userId = Number(req.params.userId);
+    if (!Number.isFinite(userId) || userId <= 0) {
+      return res.status(400).json({ ok: false, error: "Invalid user ID" });
+    }
+
+    const { ban } = req.body;
+    const { rows } = await pool.query(
+      "UPDATE users SET banned = $1 WHERE id = $2 RETURNING id, email, username, banned",
+      [Boolean(ban), userId]
+    );
+
+    if (rows.length === 0) {
+      return res.status(404).json({ ok: false, error: "User not found" });
+    }
+
+    return res.json({ ok: true, user: rows[0] });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+router.post("/admin/users/:userId/reset-work", requireAdmin, async (req, res, next) => {
+  try {
+    const userId = Number(req.params.userId);
+    if (!Number.isFinite(userId) || userId <= 0) {
+      return res.status(400).json({ ok: false, error: "Invalid user ID" });
+    }
+
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+
+      // Get all pixels owned by this user
+      const { rows: pixels } = await client.query(
+        "SELECT x, y FROM canvas_pixels WHERE owner_id = $1",
+        [userId]
+      );
+
+      // Remove all pixels
+      await client.query("DELETE FROM canvas_pixels WHERE owner_id = $1", [userId]);
+
+      // Remove bubble titles
+      await client.query("DELETE FROM bubble_titles WHERE user_id = $1", [userId]);
+
+      await client.query("COMMIT");
+
+      // Notify all clients about removed pixels
+      const io = req.app.get("io");
+      if (io && pixels.length > 0) {
+        io.emit("paint_applied", {
+          mode: "erase",
+          brushSize: 1,
+          userId: userId,
+          modifiedPixels: pixels
+        });
+      }
+
+      return res.json({ ok: true, pixelsRemoved: pixels.length });
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  } catch (error) {
+    return next(error);
+  }
+});
+
+router.post("/admin/users/:userId/reset-progress", requireAdmin, async (req, res, next) => {
+  try {
+    const userId = Number(req.params.userId);
+    if (!Number.isFinite(userId) || userId <= 0) {
+      return res.status(400).json({ ok: false, error: "Invalid user ID" });
+    }
+
+    const { rows } = await pool.query(
+      "UPDATE users SET xp = 0, level = 0 WHERE id = $1 RETURNING id, email, username, xp, level",
+      [userId]
+    );
+
+    if (rows.length === 0) {
+      return res.status(404).json({ ok: false, error: "User not found" });
+    }
+
+    return res.json({ ok: true, user: rows[0] });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+router.post("/admin/users/:userId/add-tokens", requireAdmin, async (req, res, next) => {
+  try {
+    const userId = Number(req.params.userId);
+    if (!Number.isFinite(userId) || userId <= 0) {
+      return res.status(400).json({ ok: false, error: "Invalid user ID" });
+    }
+
+    const tokensToAdd = Number(req.body.tokens);
+    if (!Number.isFinite(tokensToAdd) || tokensToAdd < 0) {
+      return res.status(400).json({ ok: false, error: "Invalid token amount" });
+    }
+
+    const { rows } = await pool.query(
+      "UPDATE users SET palette_tokens = palette_tokens + $1 WHERE id = $2 RETURNING id, email, username, palette_tokens",
+      [tokensToAdd, userId]
+    );
+
+    if (rows.length === 0) {
+      return res.status(404).json({ ok: false, error: "User not found" });
+    }
+
+    return res.json({ ok: true, user: rows[0] });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+router.post("/admin/users/:userId/set-daily-limit", requireAdmin, async (req, res, next) => {
+  try {
+    const userId = Number(req.params.userId);
+    if (!Number.isFinite(userId) || userId <= 0) {
+      return res.status(400).json({ ok: false, error: "Invalid user ID" });
+    }
+
+    const override = req.body.override === null ? null : Number(req.body.override);
+    if (override !== null && (!Number.isFinite(override) || override < 0)) {
+      return res.status(400).json({ ok: false, error: "Invalid daily limit override" });
+    }
+
+    const { rows } = await pool.query(
+      "UPDATE users SET daily_limit_override = $1 WHERE id = $2 RETURNING id, email, username, daily_limit_override",
+      [override, userId]
+    );
+
+    if (rows.length === 0) {
+      return res.status(404).json({ ok: false, error: "User not found" });
+    }
+
+    return res.json({ ok: true, user: rows[0] });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+router.get("/admin/level-config", requireAdmin, async (req, res, next) => {
+  try {
+    const { XP_PER_LEVEL, DAILY_MAX_PAINTS, DAILY_PAINT_GROWTH_RATE, XP_GROWTH_RATE, getXpRequiredForNextLevel } = require("../config/constants");
+
+    const levels = [];
+    for (let i = 0; i <= 20; i++) {
+      const xpForLevel = getXpRequiredForNextLevel(i);
+      const dailyLimit = Math.max(1, Math.ceil(DAILY_MAX_PAINTS * Math.pow(DAILY_PAINT_GROWTH_RATE, i)));
+      levels.push({
+        level: i,
+        xpRequired: xpForLevel,
+        dailyLimit
+      });
+    }
+
+    return res.json({
+      ok: true,
+      config: {
+        XP_PER_LEVEL,
+        DAILY_MAX_PAINTS,
+        DAILY_PAINT_GROWTH_RATE,
+        XP_GROWTH_RATE
+      },
+      levels
+    });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+router.post("/admin/level-config", requireAdmin, async (req, res, next) => {
+  try {
+    const { XP_PER_LEVEL, DAILY_MAX_PAINTS, DAILY_PAINT_GROWTH_RATE, XP_GROWTH_RATE } = req.body;
+
+    if (XP_PER_LEVEL !== undefined) {
+      const xp = Number(XP_PER_LEVEL);
+      if (!Number.isFinite(xp) || xp < 1) {
+        return res.status(400).json({ ok: false, error: "Invalid XP_PER_LEVEL" });
+      }
+    }
+
+    if (DAILY_MAX_PAINTS !== undefined) {
+      const daily = Number(DAILY_MAX_PAINTS);
+      if (!Number.isFinite(daily) || daily < 1) {
+        return res.status(400).json({ ok: false, error: "Invalid DAILY_MAX_PAINTS" });
+      }
+    }
+
+    if (DAILY_PAINT_GROWTH_RATE !== undefined) {
+      const rate = Number(DAILY_PAINT_GROWTH_RATE);
+      if (!Number.isFinite(rate) || rate < 1) {
+        return res.status(400).json({ ok: false, error: "Invalid DAILY_PAINT_GROWTH_RATE" });
+      }
+    }
+
+    if (XP_GROWTH_RATE !== undefined) {
+      const rate = Number(XP_GROWTH_RATE);
+      if (!Number.isFinite(rate) || rate < 1) {
+        return res.status(400).json({ ok: false, error: "Invalid XP_GROWTH_RATE" });
+      }
+    }
+
+    // Update constants file
+    let constantsContent = require("fs").readFileSync(require("path").resolve(__dirname, "../config/constants.js"), "utf8");
+
+    if (XP_PER_LEVEL !== undefined) {
+      constantsContent = constantsContent.replace(/const XP_PER_LEVEL = \d+;/, `const XP_PER_LEVEL = ${Number(XP_PER_LEVEL)};`);
+    }
+    if (DAILY_MAX_PAINTS !== undefined) {
+      constantsContent = constantsContent.replace(/const DAILY_MAX_PAINTS = \d+;/, `const DAILY_MAX_PAINTS = ${Number(DAILY_MAX_PAINTS)};`);
+    }
+    if (DAILY_PAINT_GROWTH_RATE !== undefined) {
+      constantsContent = constantsContent.replace(/const DAILY_PAINT_GROWTH_RATE = [\d.]+;/, `const DAILY_PAINT_GROWTH_RATE = ${Number(DAILY_PAINT_GROWTH_RATE)};`);
+    }
+    if (XP_GROWTH_RATE !== undefined) {
+      constantsContent = constantsContent.replace(/const XP_GROWTH_RATE = [\d.]+;/, `const XP_GROWTH_RATE = ${Number(XP_GROWTH_RATE)};`);
+    }
+
+    require("fs").writeFileSync(require("path").resolve(__dirname, "../config/constants.js"), constantsContent);
+
+    return res.json({ ok: true, message: "Config updated. Server restart required for changes to take effect." });
   } catch (error) {
     return next(error);
   }

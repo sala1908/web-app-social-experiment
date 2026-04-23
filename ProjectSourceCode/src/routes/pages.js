@@ -250,4 +250,21 @@ router.get("/profile", async (req, res, next) => {
   }
 });
 
+router.get("/admin-dashboard", (req, res, next) => {
+  try {
+    if (!req.session?.isAdmin) {
+      return res.redirect("/login");
+    }
+
+    return res.render("admin-dashboard", {
+      title: "Admin Dashboard",
+      isAuthenticated: false,
+      isAdmin: true,
+      user: req.user || null
+    });
+  } catch (error) {
+    return next(error);
+  }
+});
+
 module.exports = router;

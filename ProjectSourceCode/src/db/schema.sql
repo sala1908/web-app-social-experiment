@@ -29,6 +29,12 @@ ALTER TABLE users
 ALTER TABLE users
   ADD COLUMN IF NOT EXISTS tutorial_seen BOOLEAN NOT NULL DEFAULT false;
 
+ALTER TABLE users
+  ADD COLUMN IF NOT EXISTS banned BOOLEAN NOT NULL DEFAULT false;
+
+ALTER TABLE users
+  ADD COLUMN IF NOT EXISTS daily_limit_override INTEGER;
+
 CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username_lower ON users (LOWER(username));
 
 CREATE TABLE IF NOT EXISTS default_palette (

@@ -68,11 +68,15 @@ router.post("/login", async (req, res) => {
   }
 
   try {
-    const { rows } = await pool.query("SELECT id, email, username, password_hash FROM users WHERE LOWER(email) = $1 OR LOWER(username) = $1", [credential]);
+    const { rows } = await pool.query("SELECT id, email, username, password_hash, banned FROM users WHERE LOWER(email) = $1 OR LOWER(username) = $1", [credential]);
     const user = rows[0];
 
     if (!user) {
       return res.status(401).render("login", { title: "Login", error: "Invalid credentials." });
+    }
+
+    if (user.banned) {
+      return res.status(403).render("login", { title: "Login", error: "Your account has been banned." });
     }
 
     const passwordOk = await bcrypt.compare(password, user.password_hash);

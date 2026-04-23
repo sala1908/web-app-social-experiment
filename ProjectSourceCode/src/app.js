@@ -84,14 +84,28 @@ function createApp() {
     }
 
     try {
-      const { rows } = await pool.query("SELECT id, email, username, xp, level, palette_tokens, selected_palette_id, tutorial_seen FROM users WHERE id = $1", [req.session.userId]);
-      req.user = rows[0]
-        ? {
-            ...rows[0],
-            displayName: rows[0].username || rows[0].email.split("@")[0],
-            isAdmin: false
-          }
-        : null;
+      const { rows } = await pool.query("SELECT id, email, username, xp, level, palette_tokens, selected_palette_id, tutorial_seen, banned, daily_limit_override FROM users WHERE id = $1", [req.session.userId]);
+      
+      if (rows.length === 0) {
+        return next();
+      }
+
+      const user = rows[0];
+      
+      // If user is banned, destroy session
+      if (user.banned) {
+        req.session.destroy((err) => {
+          res.clearCookie("connect.sid");
+          return res.redirect("/");
+        });
+        return;
+      }
+
+      req.user = {
+        ...user,
+        displayName: user.username || user.email.split("@")[0],
+        isAdmin: false
+      };
       res.locals.currentUser = req.user;
       return next();
     } catch (error) {
