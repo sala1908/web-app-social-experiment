@@ -515,13 +515,30 @@ router.get("/canvas", async (req, res, next) => {
 router.get("/me", (req, res) => {
   const isAdmin = Boolean(req.session && req.session.isAdmin);
   const customUser = isAdmin
-    ? { id: null, username: "Admin", email: null, xp: 0, level: 0, palette_tokens: 999, selected_palette_id: req.session.adminPaletteId || STARTER_PALETTE_ID, isAdmin: true }
+    ? { id: null, username: "Admin", email: null, xp: 0, level: 0, palette_tokens: 999, selected_palette_id: req.session.adminPaletteId || STARTER_PALETTE_ID, tutorial_seen: true, isAdmin: true }
     : req.user || null;
 
   return res.json({
     authenticated: Boolean(req.user || isAdmin),
     user: customUser
   });
+});
+
+router.post("/me/tutorial-seen", requireAuth, async (req, res, next) => {
+  const userId = req.session && req.session.userId ? req.session.userId : null;
+  if (!userId) {
+    return res.status(401).json({ error: "User context is missing." });
+  }
+
+  try {
+    const { rows } = await pool.query(
+      "UPDATE users SET tutorial_seen = true WHERE id = $1 RETURNING tutorial_seen",
+      [userId]
+    );
+    return res.json({ ok: true, tutorial_seen: rows[0] ? rows[0].tutorial_seen : true });
+  } catch (error) {
+    return next(error);
+  }
 });
 
 router.get("/welcome", (req, res) => {

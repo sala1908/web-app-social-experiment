@@ -45,6 +45,7 @@
   </section>
 
   <section class="canvas-shell">
+    <button type="button" id="open-tutorial" class="canvas-help-button" aria-label="Open tutorial">?</button>
     <canvas id="pixel-canvas"></canvas>
   </section>
 
@@ -81,6 +82,41 @@
       <p id="palette-store-summary" class="interaction-summary"></p>
       <div id="palette-store-grid" class="palette-store-grid"></div>
       <button type="button" id="palette-store-close" class="interaction-close">Close</button>
+    </div>
+  </section>
+
+  <div id="tutorial-backdrop" class="interaction-backdrop" hidden></div>
+  <section id="tutorial-modal" class="interaction-modal" aria-hidden="true" hidden>
+    <div class="interaction-card tutorial-card">
+      <p class="interaction-kicker">Quick Start</p>
+      <h2>How to Use Web-E-Vil</h2>
+      <p id="tutorial-token-summary" class="interaction-summary"></p>
+      <div class="tutorial-section">
+        <h3>Palettes</h3>
+        <ul>
+          <li>Open Palette Store from the top bar to unlock and select palettes.</li>
+          <li>Use the Palette dropdown to switch between unlocked palettes.</li>
+          <li>Use number keys and QWERTY keys to pick swatches quickly.</li>
+        </ul>
+      </div>
+      <div class="tutorial-section">
+        <h3>Canvas Controls</h3>
+        <ul>
+          <li>Left click and drag to paint.</li>
+          <li>Use Erase mode to clear pixels.</li>
+          <li>Right click and drag to pan around the canvas.</li>
+          <li>Use + and - to zoom in and out.</li>
+          <li>Use mouse wheel over the canvas to change brush size.</li>
+        </ul>
+      </div>
+      <div class="tutorial-section">
+        <h3>Protected Groups</h3>
+        <ul>
+          <li>Click protected labels to open interaction options.</li>
+          <li>Hold Ctrl to reveal your own protected labels and tools.</li>
+        </ul>
+      </div>
+      <button type="button" id="tutorial-close" class="interaction-close">Let&apos;s Draw</button>
     </div>
   </section>
 

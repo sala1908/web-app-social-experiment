@@ -18,6 +18,11 @@
   const paletteStoreSummary = document.getElementById("palette-store-summary");
   const paletteStoreGrid = document.getElementById("palette-store-grid");
   const paletteStoreClose = document.getElementById("palette-store-close");
+  const openTutorialBtn = document.getElementById("open-tutorial");
+  const tutorialBackdrop = document.getElementById("tutorial-backdrop");
+  const tutorialModal = document.getElementById("tutorial-modal");
+  const tutorialTokenSummary = document.getElementById("tutorial-token-summary");
+  const tutorialClose = document.getElementById("tutorial-close");
   const guestPaintBackdrop = document.getElementById("guest-paint-backdrop");
   const guestPaintModal = document.getElementById("guest-paint-modal");
   const guestPaintClose = document.getElementById("guest-paint-close");
@@ -88,17 +93,70 @@
     return level;
   }
 
+  function getProgressForCurrentLevel(xp, level) {
+    let remainingXp = Math.max(0, Math.floor(Number(xp) || 0));
+    const normalizedLevel = Math.max(0, Math.floor(Number(level) || 0));
+
+    for (let index = 0; index < normalizedLevel; index += 1) {
+      remainingXp -= getXpRequiredForNextLevel(index);
+      if (remainingXp < 0) {
+        return 0;
+      }
+    }
+
+    return remainingXp;
+  }
+
+  function addXpToCurrentUser(xpGained) {
+    if (!currentUser) {
+      return;
+    }
+
+    let level = Math.max(0, Math.floor(Number(currentUser.level) || 0));
+    let xp = Math.max(0, Math.floor(Number(currentUser.xp) || 0));
+    let progress = getProgressForCurrentLevel(xp, level);
+    let gained = Math.max(0, Math.floor(Number(xpGained) || 0));
+
+    while (gained > 0) {
+      const required = getXpRequiredForNextLevel(level);
+      const toLevel = Math.max(0, required - progress);
+      if (gained < toLevel) {
+        progress += gained;
+        xp += gained;
+        gained = 0;
+      } else {
+        xp += toLevel;
+        gained -= toLevel;
+        level += 1;
+        progress = 0;
+      }
+    }
+
+    currentUser.level = level;
+    currentUser.xp = xp;
+  }
+
   function applyOptimisticProgress(xpGained, paintCost = 1) {
     if (!authenticated) {
       return;
     }
 
+    const normalizedXpGain = Math.max(0, Number(xpGained) || 0);
+
+    if (currentUser && typeof state.serverXp !== "number") {
+      state.serverXp = Math.max(0, Number(currentUser.xp) || 0);
+    }
+
     if (currentUser && Number.isFinite(Number(currentUser.level))) {
       const previousLevel = Math.max(0, Number(currentUser.level) || 0);
       const previousDailyMax = getDailyPaintLimit(previousLevel);
-      if (typeof state.serverXp === "number") {
-        state.pendingXp += Math.max(0, Number(xpGained) || 0);
-        recomputeXpFromServer();
+      if (normalizedXpGain > 0) {
+        if (typeof state.serverXp === "number") {
+          state.pendingXp += normalizedXpGain;
+          recomputeXpFromServer();
+        } else {
+          addXpToCurrentUser(normalizedXpGain);
+        }
       }
       const nextLevel = Math.max(0, Number(currentUser.level) || 0);
 
@@ -1110,6 +1168,62 @@
     paletteStoreModal.setAttribute("aria-hidden", "true");
   }
 
+  function getTutorialTokenSummary() {
+    if (!authenticated || !currentUser) {
+      return "Log in to paint and earn level-up tokens you can spend in the Palette Store.";
+    }
+
+    const tokens = Math.max(0, Number(currentUser.palette_tokens) || 0);
+    if (tokens === 1) {
+      return "You have 1 level-up token to use right now in the Palette Store. Unlock a palette and start drawing with fresh colors.";
+    }
+
+    if (tokens > 1) {
+      return `You have ${tokens} level-up tokens ready to spend right now in the Palette Store.`;
+    }
+
+    return "You have no tokens right now. Keep painting to level up and unlock more palettes.";
+  }
+
+  function openTutorialModal(markSeen = true) {
+    if (!tutorialBackdrop || !tutorialModal) {
+      return;
+    }
+
+    if (tutorialTokenSummary) {
+      tutorialTokenSummary.textContent = getTutorialTokenSummary();
+    }
+
+    tutorialBackdrop.hidden = false;
+    tutorialModal.hidden = false;
+    tutorialModal.setAttribute("aria-hidden", "false");
+
+    if (markSeen && authenticated && currentUser) {
+      fetch("/api/me/tutorial-seen", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" }
+      }).catch(() => {
+        // Silently fail if marking tutorial as seen fails; modal still displays.
+      });
+    }
+  }
+
+  function closeTutorialModal() {
+    if (!tutorialBackdrop || !tutorialModal) {
+      return;
+    }
+
+    tutorialBackdrop.hidden = true;
+    tutorialModal.hidden = true;
+    tutorialModal.setAttribute("aria-hidden", "true");
+  }
+
+  function maybeOpenFirstStartTutorial() {
+    if (authenticated && currentUser && !currentUser.tutorial_seen) {
+      openTutorialModal(true);
+    }
+  }
+
   async function selectPalette(paletteId) {
     const response = await fetch("/api/palette/select", {
       method: "POST",
@@ -1266,6 +1380,11 @@
       updateUsage();
     }).catch(() => {
       setStatus("Paint request failed.", true);
+      state.pendingPaints = Math.max(0, state.pendingPaints - 1);
+      state.pendingXp = Math.max(0, state.pendingXp - optimisticXpGain);
+      recomputeRemainingPaints();
+      recomputeXpFromServer();
+      updateUsage();
     });
   }
 
@@ -1518,6 +1637,26 @@
       paletteStoreClose.addEventListener("click", closePaletteStore);
     }
 
+    if (openTutorialBtn) {
+      openTutorialBtn.addEventListener("click", () => {
+        openTutorialModal(true);
+      });
+    }
+
+    if (tutorialBackdrop) {
+      tutorialBackdrop.addEventListener("click", closeTutorialModal);
+    }
+
+    if (tutorialClose) {
+      tutorialClose.addEventListener("click", closeTutorialModal);
+    }
+
+    window.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && tutorialModal && !tutorialModal.hidden) {
+        closeTutorialModal();
+      }
+    });
+
     if (guestPaintClose) {
       guestPaintClose.addEventListener("click", closeGuestPaintModal);
     }
@@ -1565,6 +1704,7 @@
     await loadLimits();
 
     connectSocket();
+    maybeOpenFirstStartTutorial();
     updateUsage();
   }
 

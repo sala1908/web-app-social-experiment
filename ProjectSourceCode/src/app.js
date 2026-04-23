@@ -84,7 +84,7 @@ function createApp() {
     }
 
     try {
-      const { rows } = await pool.query("SELECT id, email, username, xp, level, palette_tokens, selected_palette_id FROM users WHERE id = $1", [req.session.userId]);
+      const { rows } = await pool.query("SELECT id, email, username, xp, level, palette_tokens, selected_palette_id, tutorial_seen FROM users WHERE id = $1", [req.session.userId]);
       req.user = rows[0]
         ? {
             ...rows[0],

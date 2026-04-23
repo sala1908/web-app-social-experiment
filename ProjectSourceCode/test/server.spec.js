@@ -420,6 +420,26 @@ describe("Palette store and level-up tokens", function () {
     expect(colors).to.not.include("#FF595E");
   });
 
+  it("starts new users with one palette token", async function () {
+    const ts = Date.now();
+    const password = "validpass123";
+    const email = `starter_token_${ts}@example.com`;
+    const username = `st_${String(ts).slice(-8)}`;
+    const agent = chai.request.agent(globalServer);
+
+    await agent.post("/auth/register").type("form").send({ email, username, password });
+
+    const storeRes = await agent.get("/api/palette/store");
+    expect(storeRes).to.have.status(200);
+    expect(storeRes.body).to.have.property("tokens", 1);
+
+    const userRow = await pool.query("SELECT palette_tokens FROM users WHERE email = $1", [email]);
+    expect(userRow.rows).to.have.length(1);
+    expect(Number(userRow.rows[0].palette_tokens)).to.equal(1);
+
+    agent.close();
+  });
+
   it("grants level-up token and unlocks a palette pack that can be selected", async function () {
     const ts = Date.now();
     const password = "validpass123";
