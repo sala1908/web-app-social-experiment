@@ -66,9 +66,78 @@
     return normalized;
   }
 
+  function getXpRequiredForNextLevel(level) {
+    const normalizedLevel = Math.max(0, Math.floor(Number(level) || 0));
+    return Math.max(1, Math.ceil(100 * Math.pow(1.15, normalizedLevel)));
+  }
+
+  function getDailyPaintLimit(level) {
+    const normalizedLevel = Math.max(0, Math.floor(Number(level) || 0));
+    return Math.max(1, Math.ceil(100 * Math.pow(1.25, normalizedLevel)));
+  }
+
+  function getLevelFromXp(xp) {
+    let remainingXp = Math.max(0, Math.floor(Number(xp) || 0));
+    let level = 0;
+
+    while (remainingXp >= getXpRequiredForNextLevel(level)) {
+      remainingXp -= getXpRequiredForNextLevel(level);
+      level += 1;
+    }
+
+    return level;
+  }
+
+  function applyOptimisticProgress(xpGained, paintCost = 1) {
+    if (!authenticated) {
+      return;
+    }
+
+    if (currentUser && Number.isFinite(Number(currentUser.level))) {
+      const previousLevel = Math.max(0, Number(currentUser.level) || 0);
+      const previousDailyMax = getDailyPaintLimit(previousLevel);
+      if (typeof state.serverXp === "number") {
+        state.pendingXp += Math.max(0, Number(xpGained) || 0);
+        recomputeXpFromServer();
+      }
+      const nextLevel = Math.max(0, Number(currentUser.level) || 0);
+
+      if (!isAdmin && typeof state.remainingPaints === "number") {
+        const nextDailyMax = getDailyPaintLimit(nextLevel);
+        state.pendingPaints += paintCost;
+        state.remainingPaints = Math.max(0, state.remainingPaints + (nextDailyMax - previousDailyMax) - paintCost);
+      }
+    } else if (!isAdmin && typeof state.remainingPaints === "number") {
+      state.pendingPaints += paintCost;
+      state.remainingPaints = Math.max(0, state.remainingPaints - paintCost);
+    }
+
+    updateUsage();
+  }
+
+  function recomputeRemainingPaints() {
+    if (typeof state.serverRemainingPaints === "number") {
+      state.remainingPaints = Math.max(0, state.serverRemainingPaints - state.pendingPaints);
+    }
+  }
+
+  function recomputeXpFromServer() {
+    if (!currentUser || typeof state.serverXp !== "number") {
+      return;
+    }
+
+    const effectiveXp = Math.max(0, state.serverXp + state.pendingXp);
+    currentUser.xp = effectiveXp;
+    currentUser.level = getLevelFromXp(effectiveXp);
+  }
+
   function applyViewerStateFromUser(user, authFlag) {
     const normalizedUser = normalizeUserProgress(user || null);
     currentUser = normalizedUser;
+    state.serverXp = normalizedUser && Number.isFinite(Number(normalizedUser.xp))
+      ? Number(normalizedUser.xp)
+      : null;
+    state.pendingXp = 0;
     const serverAdmin = Boolean(normalizedUser && normalizedUser.isAdmin);
     const serverAuthenticated = Boolean(authFlag || serverAdmin || (normalizedUser && normalizedUser.id));
     isAdmin = serverAdmin;
@@ -107,6 +176,10 @@
     lastPaintKey: "",
     strokeDedupeKeys: new Set(),
     remainingPaints: null,
+    serverRemainingPaints: null,
+    pendingPaints: 0,
+    serverXp: currentUser && Number.isFinite(Number(currentUser.xp)) ? Number(currentUser.xp) : null,
+    pendingXp: 0,
     ctrlPressed: false,
     pendingTitle: null,
     hoveredGroup: null,
@@ -293,6 +366,7 @@
     }));
 
     applyModifiedPixels(modified);
+    return modified;
   }
 
   function computeTaggedGroups() {
@@ -1080,7 +1154,8 @@
     }
 
     const payload = await response.json();
-    state.remainingPaints = payload.remainingPaints;
+    state.serverRemainingPaints = typeof payload.remainingPaints === "number" ? payload.remainingPaints : null;
+    recomputeRemainingPaints();
     updateUsage();
   }
 
@@ -1117,6 +1192,11 @@
        return;
      }
 
+    if (typeof state.remainingPaints === "number" && state.remainingPaints <= 0) {
+      setStatus("Daily paint limit reached.", true);
+      return;
+    }
+
     const brushSize = state.brushSize;
     const paintMode = state.mode;
     const paintColor = state.activeColor;
@@ -1130,7 +1210,9 @@
     state.strokeDedupeKeys.add(dedupeKey);
 
     // Paint locally first so dragging feels immediate; server response reconciles state.
-    applyLocalBrush(x, y, brushSize, paintColor, identity.ownerId, identity.ownerTag, paintMode);
+    const localModifiedPixels = applyLocalBrush(x, y, brushSize, paintColor, identity.ownerId, identity.ownerTag, paintMode);
+    const optimisticXpGain = paintMode === "paint" ? localModifiedPixels.length : 0;
+    applyOptimisticProgress(optimisticXpGain, 1);
 
     paintQueue = paintQueue.then(async () => {
       const response = await fetch("/api/paint", {
@@ -1149,14 +1231,24 @@
       if (!response.ok) {
         setStatus(payload.error || "Paint request failed.", true);
         // Re-sync after server rejection so optimistic local state does not drift.
+        state.pendingPaints = Math.max(0, state.pendingPaints - 1);
+        state.pendingXp = Math.max(0, state.pendingXp - optimisticXpGain);
+        recomputeXpFromServer();
         await loadCanvas();
+        await loadLimits();
+        updateUsage();
         return;
       }
 
-      state.remainingPaints = payload.remainingPaints;
+      state.pendingPaints = Math.max(0, state.pendingPaints - 1);
+      state.serverRemainingPaints = typeof payload.remainingPaints === "number" ? payload.remainingPaints : state.serverRemainingPaints;
+      state.pendingXp = Math.max(0, state.pendingXp - optimisticXpGain);
+      if (typeof payload.xp === "number") {
+        state.serverXp = payload.xp;
+      }
+      recomputeRemainingPaints();
+      recomputeXpFromServer();
       if (currentUser && Number.isFinite(Number(payload.xp)) && Number.isFinite(Number(payload.level))) {
-        currentUser.xp = Number(payload.xp);
-        currentUser.level = Number(payload.level);
         if (Number.isFinite(Number(payload.paletteTokens))) {
           currentUser.palette_tokens = Number(payload.paletteTokens);
         }

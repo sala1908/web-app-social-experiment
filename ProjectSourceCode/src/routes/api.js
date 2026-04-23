@@ -1,7 +1,13 @@
 const express = require("express");
 const { pool } = require("../db/pool");
 const { requireAuth, requireAdmin } = require("../middleware/auth");
-const { GRID_SIZE, MAX_BRUSH_SIZE, DAILY_MAX_PAINTS, GUEST_MAX_PAINTS, XP_PER_LEVEL } = require("../config/constants");
+const {
+  GRID_SIZE,
+  MAX_BRUSH_SIZE,
+  GUEST_MAX_PAINTS,
+  getDailyPaintLimit,
+  getLevelFromXp
+} = require("../config/constants");
 
 const router = express.Router();
 
@@ -174,12 +180,14 @@ async function buildPaletteResponse(dbClient, req) {
   };
 }
 
-async function getAllowedColors(dbClient, req) {
-  const payload = await buildPaletteResponse(dbClient, req);
-  return new Set((payload.palette || []).map((row) => String(row.color_hex || "").toUpperCase()));
-}
-
 async function getRemainingPaints(client, userId) {
+  const { rows: userRows } = await client.query(
+    "SELECT level FROM users WHERE id = $1",
+    [userId]
+  );
+
+  const currentLevel = normalizeLevel(userRows[0] ? userRows[0].level : 0);
+  const dailyMaxPaints = getDailyPaintLimit(currentLevel);
   const { rows } = await client.query(
     `
       SELECT COUNT(*)::int AS paints_today
@@ -190,7 +198,12 @@ async function getRemainingPaints(client, userId) {
     [userId]
   );
 
-  return Math.max(0, DAILY_MAX_PAINTS - rows[0].paints_today);
+  return {
+    currentLevel,
+    dailyMaxPaints,
+    paintsToday: rows[0].paints_today,
+    remainingPaints: Math.max(0, dailyMaxPaints - rows[0].paints_today)
+  };
 }
 
 function getGuestRemainingPaints(session) {
@@ -527,8 +540,11 @@ router.get("/me/limits", requireAuth, async (req, res, next) => {
 
   const client = await pool.connect();
   try {
-    const remaining = await getRemainingPaints(client, req.session.userId);
-    return res.json({ dailyMaxPaints: DAILY_MAX_PAINTS, remainingPaints: remaining });
+    const limitInfo = await getRemainingPaints(client, req.session.userId);
+    return res.json({
+      dailyMaxPaints: limitInfo.dailyMaxPaints,
+      remainingPaints: limitInfo.remainingPaints
+    });
   } catch (error) {
     return next(error);
   } finally {
@@ -732,22 +748,16 @@ router.post("/paint", async (req, res, next) => {
   try {
     await client.query("BEGIN");
 
-    let remaining = null;
+    let limitInfo = null;
     if (userId) {
-      remaining = await getRemainingPaints(client, userId);
-      if (remaining <= 0) {
+      limitInfo = await getRemainingPaints(client, userId);
+      if (limitInfo.remainingPaints <= 0) {
         await client.query("ROLLBACK");
-        return res.status(429).json({ error: "Daily paint limit reached.", dailyMaxPaints: DAILY_MAX_PAINTS, remainingPaints: 0 });
+        return res.status(429).json({ error: "Daily paint limit reached.", dailyMaxPaints: limitInfo.dailyMaxPaints, remainingPaints: 0 });
       }
     }
 
-    const allowedColors = await getAllowedColors(client, req);
     const color = rawColor.toUpperCase();
-
-    if (mode === "paint" && !allowedColors.has(color)) {
-      await client.query("ROLLBACK");
-      return res.status(403).json({ error: "Color is not in your allowed palette." });
-    }
 
     const { rows: canvasRows } = await client.query(
       `
@@ -846,7 +856,7 @@ router.post("/paint", async (req, res, next) => {
         const current = currentRows[0] || { xp: 0, level: 0 };
         previousLevel = normalizeLevel(current.level);
         const nextXp = Math.max(0, Number(current.xp || 0)) + xpGained;
-        const nextLevel = Math.floor(nextXp / XP_PER_LEVEL);
+        const nextLevel = getLevelFromXp(nextXp);
         levelsGained = Math.max(0, nextLevel - previousLevel);
         tokensGained = levelsGained;
 
@@ -872,7 +882,10 @@ router.post("/paint", async (req, res, next) => {
 
     await client.query("COMMIT");
 
-    const nextRemaining = typeof remaining === "number" ? Math.max(0, remaining - 1) : null;
+    const nextDailyMaxPaints = userProgress ? getDailyPaintLimit(userProgress.level) : limitInfo ? limitInfo.dailyMaxPaints : null;
+    const nextRemaining = limitInfo
+      ? Math.max(0, nextDailyMaxPaints - (limitInfo.paintsToday + 1))
+      : null;
     const io = req.app.get("io");
     if (io) {
       io.emit("paint_applied", {
@@ -886,6 +899,7 @@ router.post("/paint", async (req, res, next) => {
     return res.json({
       ok: true,
       remainingPaints: nextRemaining,
+      dailyMaxPaints: nextDailyMaxPaints,
       xpGained,
       xp: userProgress ? userProgress.xp : null,
       level: userProgress ? userProgress.level : null,

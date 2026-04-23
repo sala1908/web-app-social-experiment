@@ -5,7 +5,7 @@
       <a href="/" class="home-button">Home</a>
       <button type="button" id="open-palette-store" class="home-button">Palette Store</button>
       {{#if isAuthenticated}}
-        <span class="user-email">{{#if user.displayName}}{{user.displayName}}{{else}}{{user.email}}{{/if}}</span>
+        <a href="/profile" class="user-profile-link">{{#if user.displayName}}{{user.displayName}}{{else}}{{user.email}}{{/if}}</a>
         <form method="POST" action="/auth/logout">
           <button type="submit">Logout</button>
         </form>
