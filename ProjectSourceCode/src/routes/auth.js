@@ -4,7 +4,7 @@ const { pool } = require("../db/pool");
 
 const router = express.Router();
 const ADMIN_USERNAME = "admin";
-const ADMIN_PASSWORD = "12345678";
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
 
 router.post("/register", async (req, res) => {
   const email = (req.body.email || "").trim().toLowerCase();
