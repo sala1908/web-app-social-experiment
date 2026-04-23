@@ -112,6 +112,48 @@ describe("Auth registration API", function () {
 
     agent.close();
   });
+
+  it("Positive: login works with both email and username", async function () {
+    this.timeout(7000);
+
+    const ts = Date.now();
+    const email = `login_test_${ts}@example.com`;
+    const username = `login_test_${ts}`;
+    const password = "validpass123";
+
+    // Register a user
+    await chai
+      .request(globalServer)
+      .post("/auth/register")
+      .type("form")
+      .send({ email, username, password });
+
+    // Test login with email
+    const emailLoginAgent = chai.request.agent(globalServer);
+    const emailLoginRes = await emailLoginAgent
+      .post("/auth/login")
+      .type("form")
+      .send({ email, password });
+
+    expect(emailLoginRes).to.have.status(200);
+    const meResEmail = await emailLoginAgent.get("/api/me");
+    expect(meResEmail.body).to.have.property("authenticated", true);
+    expect(meResEmail.body.user).to.have.property("email", email);
+    emailLoginAgent.close();
+
+    // Test login with username
+    const usernameLoginAgent = chai.request.agent(globalServer);
+    const usernameLoginRes = await usernameLoginAgent
+      .post("/auth/login")
+      .type("form")
+      .send({ email: username, password });
+
+    expect(usernameLoginRes).to.have.status(200);
+    const meResUsername = await usernameLoginAgent.get("/api/me");
+    expect(meResUsername.body).to.have.property("authenticated", true);
+    expect(meResUsername.body.user).to.have.property("username", username);
+    usernameLoginAgent.close();
+  });
 });
 
 describe("Progression rules", function () {

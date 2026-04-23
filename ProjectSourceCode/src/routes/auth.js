@@ -56,10 +56,10 @@ router.post("/register", async (req, res) => {
 });
 
 router.post("/login", async (req, res) => {
-  const email = (req.body.email || "").trim().toLowerCase();
+  const credential = (req.body.email || "").trim().toLowerCase();
   const password = req.body.password || "";
 
-  if (email === ADMIN_USERNAME && password === ADMIN_PASSWORD) {
+  if (credential === ADMIN_USERNAME && password === ADMIN_PASSWORD) {
     req.session.userId = null;
     req.session.isAdmin = true;
     req.session.adminUsername = ADMIN_USERNAME;
@@ -68,7 +68,7 @@ router.post("/login", async (req, res) => {
   }
 
   try {
-    const { rows } = await pool.query("SELECT id, email, username, password_hash FROM users WHERE email = $1", [email]);
+    const { rows } = await pool.query("SELECT id, email, username, password_hash FROM users WHERE LOWER(email) = $1 OR LOWER(username) = $1", [credential]);
     const user = rows[0];
 
     if (!user) {
