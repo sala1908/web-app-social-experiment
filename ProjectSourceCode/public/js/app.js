@@ -18,6 +18,14 @@
   const paletteStoreSummary = document.getElementById("palette-store-summary");
   const paletteStoreGrid = document.getElementById("palette-store-grid");
   const paletteStoreClose = document.getElementById("palette-store-close");
+  const openTutorialBtn = document.getElementById("open-tutorial");
+  const tutorialBackdrop = document.getElementById("tutorial-backdrop");
+  const tutorialModal = document.getElementById("tutorial-modal");
+  const tutorialClose = document.getElementById("tutorial-close");
+  const paletteTutorialBackdrop = document.getElementById("palette-tutorial-backdrop");
+  const paletteTutorialModal = document.getElementById("palette-tutorial-modal");
+  const paletteTutorialSummary = document.getElementById("palette-tutorial-summary");
+  const paletteTutorialClose = document.getElementById("palette-tutorial-close");
   const guestPaintBackdrop = document.getElementById("guest-paint-backdrop");
   const guestPaintModal = document.getElementById("guest-paint-modal");
   const guestPaintClose = document.getElementById("guest-paint-close");
@@ -29,8 +37,11 @@
   const interactionAuthLinks = document.getElementById("interaction-auth-links");
   const adminResetCanvasBtn = document.getElementById("admin-reset-canvas");
   const adminResetLimitsBtn = document.getElementById("admin-reset-limits");
+  const zoomIndicatorEl = document.getElementById("zoom-indicator");
+  const zoomIndicatorFillEl = document.getElementById("zoom-indicator-fill");
 
   const cfg = window.APP_CONFIG || { gridSize: 1024, maxBrushSize: 5 };
+  const USER_MIN_ZOOM_RATIO = 0.1;
   let isAdmin = window.APP_IS_ADMIN === true
     || String(window.APP_IS_ADMIN).toLowerCase() === "true"
     || Boolean(window.APP_USER && window.APP_USER.isAdmin)
@@ -66,9 +77,131 @@
     return normalized;
   }
 
+  function getXpRequiredForNextLevel(level) {
+    const normalizedLevel = Math.max(0, Math.floor(Number(level) || 0));
+    return Math.max(1, Math.ceil(100 * Math.pow(1.15, normalizedLevel)));
+  }
+
+  function getDailyPaintLimit(level) {
+    const normalizedLevel = Math.max(0, Math.floor(Number(level) || 0));
+    return Math.max(1, Math.ceil(100 * Math.pow(1.25, normalizedLevel)));
+  }
+
+  function getLevelFromXp(xp) {
+    let remainingXp = Math.max(0, Math.floor(Number(xp) || 0));
+    let level = 0;
+
+    while (remainingXp >= getXpRequiredForNextLevel(level)) {
+      remainingXp -= getXpRequiredForNextLevel(level);
+      level += 1;
+    }
+
+    return level;
+  }
+
+  function getProgressForCurrentLevel(xp, level) {
+    let remainingXp = Math.max(0, Math.floor(Number(xp) || 0));
+    const normalizedLevel = Math.max(0, Math.floor(Number(level) || 0));
+
+    for (let index = 0; index < normalizedLevel; index += 1) {
+      remainingXp -= getXpRequiredForNextLevel(index);
+      if (remainingXp < 0) {
+        return 0;
+      }
+    }
+
+    return remainingXp;
+  }
+
+  function addXpToCurrentUser(xpGained) {
+    if (!currentUser) {
+      return;
+    }
+
+    let level = Math.max(0, Math.floor(Number(currentUser.level) || 0));
+    let xp = Math.max(0, Math.floor(Number(currentUser.xp) || 0));
+    let progress = getProgressForCurrentLevel(xp, level);
+    let gained = Math.max(0, Math.floor(Number(xpGained) || 0));
+
+    while (gained > 0) {
+      const required = getXpRequiredForNextLevel(level);
+      const toLevel = Math.max(0, required - progress);
+      if (gained < toLevel) {
+        progress += gained;
+        xp += gained;
+        gained = 0;
+      } else {
+        xp += toLevel;
+        gained -= toLevel;
+        level += 1;
+        progress = 0;
+      }
+    }
+
+    currentUser.level = level;
+    currentUser.xp = xp;
+  }
+
+  function applyOptimisticProgress(xpGained, paintCost = 1) {
+    if (!authenticated) {
+      return;
+    }
+
+    const normalizedXpGain = Math.max(0, Number(xpGained) || 0);
+
+    if (currentUser && typeof state.serverXp !== "number") {
+      state.serverXp = Math.max(0, Number(currentUser.xp) || 0);
+    }
+
+    if (currentUser && Number.isFinite(Number(currentUser.level))) {
+      const previousLevel = Math.max(0, Number(currentUser.level) || 0);
+      const previousDailyMax = getDailyPaintLimit(previousLevel);
+      if (normalizedXpGain > 0) {
+        if (typeof state.serverXp === "number") {
+          state.pendingXp += normalizedXpGain;
+          recomputeXpFromServer();
+        } else {
+          addXpToCurrentUser(normalizedXpGain);
+        }
+      }
+      const nextLevel = Math.max(0, Number(currentUser.level) || 0);
+
+      if (!isAdmin && typeof state.remainingPaints === "number") {
+        const nextDailyMax = getDailyPaintLimit(nextLevel);
+        state.pendingPaints += paintCost;
+        state.remainingPaints = Math.max(0, state.remainingPaints + (nextDailyMax - previousDailyMax) - paintCost);
+      }
+    } else if (!isAdmin && typeof state.remainingPaints === "number") {
+      state.pendingPaints += paintCost;
+      state.remainingPaints = Math.max(0, state.remainingPaints - paintCost);
+    }
+
+    updateUsage();
+  }
+
+  function recomputeRemainingPaints() {
+    if (typeof state.serverRemainingPaints === "number") {
+      state.remainingPaints = Math.max(0, state.serverRemainingPaints - state.pendingPaints);
+    }
+  }
+
+  function recomputeXpFromServer() {
+    if (!currentUser || typeof state.serverXp !== "number") {
+      return;
+    }
+
+    const effectiveXp = Math.max(0, state.serverXp + state.pendingXp);
+    currentUser.xp = effectiveXp;
+    currentUser.level = getLevelFromXp(effectiveXp);
+  }
+
   function applyViewerStateFromUser(user, authFlag) {
     const normalizedUser = normalizeUserProgress(user || null);
     currentUser = normalizedUser;
+    state.serverXp = normalizedUser && Number.isFinite(Number(normalizedUser.xp))
+      ? Number(normalizedUser.xp)
+      : null;
+    state.pendingXp = 0;
     const serverAdmin = Boolean(normalizedUser && normalizedUser.isAdmin);
     const serverAuthenticated = Boolean(authFlag || serverAdmin || (normalizedUser && normalizedUser.id));
     isAdmin = serverAdmin;
@@ -90,6 +223,10 @@
     }
   }
 
+  function getMinScaleForViewer() {
+    return isAdmin ? state.minScale : state.maxScale * USER_MIN_ZOOM_RATIO;
+  }
+
   const state = {
     mode: "paint",
     brushSize: 1,
@@ -107,6 +244,10 @@
     lastPaintKey: "",
     strokeDedupeKeys: new Set(),
     remainingPaints: null,
+    serverRemainingPaints: null,
+    pendingPaints: 0,
+    serverXp: currentUser && Number.isFinite(Number(currentUser.xp)) ? Number(currentUser.xp) : null,
+    pendingXp: 0,
     ctrlPressed: false,
     pendingTitle: null,
     hoveredGroup: null,
@@ -117,7 +258,11 @@
     selectedPaletteName: "Starter Classic",
     unlockedPaletteIds: ["starter_classic"],
     availablePalettes: [],
-    paletteStoreItems: []
+    paletteStoreItems: [],
+    zoomIndicatorTimeout: null,
+    lastTouchDistance: 0,
+    touchPanStartX: null,
+    touchPanStartY: null
   };
 
   let socket = null;
@@ -293,6 +438,7 @@
     }));
 
     applyModifiedPixels(modified);
+    return modified;
   }
 
   function computeTaggedGroups() {
@@ -547,7 +693,7 @@
     const actionButtons = Array.from(interactionModal.querySelectorAll("[data-interaction-type]"));
 
     const visibleActions = isOwnGroup
-      ? (state.ctrlPressed && authenticated ? ["remove", "name"] : [])
+      ? (state.ctrlPressed && authenticated ? ["remove", "name", "set-home"] : [])
       : viewerRole === "guest"
       ? []
       : viewerRole === "admin"
@@ -830,6 +976,50 @@
       return;
     }
 
+    if (interactionType === "set-home") {
+      if (!authenticated || viewerRole === "guest") {
+        setStatus("You must be logged in to set your home.", true);
+        return;
+      }
+
+      // Get the world coordinates of the canvas center
+      const rect = canvas.getBoundingClientRect();
+      const centerScreenX = rect.width / 2;
+      const centerScreenY = rect.height / 2;
+      const homeX = Math.round((centerScreenX - state.offsetX) / state.scale);
+      const homeY = Math.round((centerScreenY - state.offsetY) / state.scale);
+
+      // Clamp to grid bounds
+      const clampedHomeX = Math.max(0, Math.min(1023, homeX));
+      const clampedHomeY = Math.max(0, Math.min(1023, homeY));
+
+      try {
+        const response = await fetch("/api/me/home", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ home_x: clampedHomeX, home_y: clampedHomeY })
+        });
+
+        const payload = await response.json();
+        if (!response.ok) {
+          setStatus(payload.error || "Unable to set home.", true);
+          return;
+        }
+
+        if (currentUser) {
+          currentUser.home_x = clampedHomeX;
+          currentUser.home_y = clampedHomeY;
+        }
+
+        setStatus("Home location set! This will be your starting point next time.", false);
+        closeInteractionModal();
+        return;
+      } catch (error) {
+        setStatus("Error setting home: " + error.message, true);
+        return;
+      }
+    }
+
     if (interactionType === "name") {
       const existingTitle = String(state.interactionGroup.title || "").trim();
       const nextTitle = window.prompt("Set a title for this bubble (max 80 characters):", existingTitle);
@@ -1036,6 +1226,118 @@
     paletteStoreModal.setAttribute("aria-hidden", "true");
   }
 
+  function getTutorialTokenSummary() {
+    if (!authenticated || !currentUser) {
+      return "Log in to paint and earn level-up tokens you can spend in the Palette Store.";
+    }
+
+    const tokens = Math.max(0, Number(currentUser.palette_tokens) || 0);
+    if (tokens === 1) {
+      return "You have 1 level-up token to use right now in the Palette Store. Unlock a palette and start drawing with fresh colors.";
+    }
+
+    if (tokens > 1) {
+      return `You have ${tokens} level-up tokens ready to spend right now in the Palette Store.`;
+    }
+
+    return "You have no tokens right now. Keep painting to level up and unlock more palettes.";
+  }
+
+  function getPaletteTutorialSummary() {
+    if (!authenticated || !currentUser) {
+      return "Log in to paint and earn level-up tokens you can spend to unlock new color palettes.";
+    }
+
+    const tokens = Math.max(0, Number(currentUser.palette_tokens) || 0);
+    if (tokens === 1) {
+      return "You have 1 level-up token to use right now. Unlock a new palette and start drawing with fresh colors!";
+    }
+
+    if (tokens > 1) {
+      return `You have ${tokens} level-up tokens ready to spend. Check out the Palette Store to unlock new color combinations!`;
+    }
+
+    return "You have no tokens right now. Keep painting to level up and earn more tokens!";
+  }
+
+  function openTutorialModal(markSeen = true) {
+    if (!tutorialBackdrop || !tutorialModal) {
+      return;
+    }
+
+    tutorialBackdrop.hidden = false;
+    tutorialModal.hidden = false;
+    tutorialModal.setAttribute("aria-hidden", "false");
+
+    if (markSeen && authenticated && currentUser) {
+      fetch("/api/me/tutorial-seen", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" }
+      }).catch(() => {
+        // Silently fail if marking tutorial as seen fails; modal still displays.
+      });
+    }
+  }
+
+  function openPaletteTutorialModal() {
+    if (!paletteTutorialBackdrop || !paletteTutorialModal) {
+      return;
+    }
+
+    if (paletteTutorialSummary) {
+      paletteTutorialSummary.textContent = getPaletteTutorialSummary();
+    }
+
+    paletteTutorialBackdrop.hidden = false;
+    paletteTutorialModal.hidden = false;
+    paletteTutorialModal.setAttribute("aria-hidden", "false");
+  }
+
+  function closeTutorialModal() {
+    if (!tutorialBackdrop || !tutorialModal) {
+      return;
+    }
+
+    tutorialBackdrop.hidden = true;
+    tutorialModal.hidden = true;
+    tutorialModal.setAttribute("aria-hidden", "true");
+  }
+
+  function closePaletteTutorialModal() {
+    if (!paletteTutorialBackdrop || !paletteTutorialModal) {
+      return;
+    }
+
+    paletteTutorialBackdrop.hidden = true;
+    paletteTutorialModal.hidden = true;
+    paletteTutorialModal.setAttribute("aria-hidden", "true");
+  }
+
+  function maybeOpenFirstStartTutorial() {
+    if (authenticated && currentUser && !currentUser.tutorial_seen) {
+      openTutorialModal(true);
+    }
+  }
+
+  function initializeHomeView() {
+    // Calculate starting zoom: 2 steps less than maxScale
+    // Each step multiplies/divides by 1.15
+    const startScale = state.maxScale / (1.15 * 1.15);
+    state.scale = Math.max(getMinScaleForViewer(), Math.min(state.maxScale, startScale));
+
+    // Get home coordinates from currentUser
+    const homeX = currentUser && Number.isFinite(Number(currentUser.home_x)) ? Number(currentUser.home_x) : 512;
+    const homeY = currentUser && Number.isFinite(Number(currentUser.home_y)) ? Number(currentUser.home_y) : 512;
+
+    // Calculate offsetX and offsetY to center on home coordinates
+    const rect = canvas.getBoundingClientRect();
+    const centerX = rect.width / 2;
+    const centerY = rect.height / 2;
+
+    state.offsetX = centerX - homeX * state.scale;
+    state.offsetY = centerY - homeY * state.scale;
+  }
+
   async function selectPalette(paletteId) {
     const response = await fetch("/api/palette/select", {
       method: "POST",
@@ -1080,7 +1382,8 @@
     }
 
     const payload = await response.json();
-    state.remainingPaints = payload.remainingPaints;
+    state.serverRemainingPaints = typeof payload.remainingPaints === "number" ? payload.remainingPaints : null;
+    recomputeRemainingPaints();
     updateUsage();
   }
 
@@ -1117,6 +1420,11 @@
        return;
      }
 
+    if (typeof state.remainingPaints === "number" && state.remainingPaints <= 0) {
+      setStatus("Daily paint limit reached.", true);
+      return;
+    }
+
     const brushSize = state.brushSize;
     const paintMode = state.mode;
     const paintColor = state.activeColor;
@@ -1130,7 +1438,9 @@
     state.strokeDedupeKeys.add(dedupeKey);
 
     // Paint locally first so dragging feels immediate; server response reconciles state.
-    applyLocalBrush(x, y, brushSize, paintColor, identity.ownerId, identity.ownerTag, paintMode);
+    const localModifiedPixels = applyLocalBrush(x, y, brushSize, paintColor, identity.ownerId, identity.ownerTag, paintMode);
+    const optimisticXpGain = paintMode === "paint" ? localModifiedPixels.length : 0;
+    applyOptimisticProgress(optimisticXpGain, 1);
 
     paintQueue = paintQueue.then(async () => {
       const response = await fetch("/api/paint", {
@@ -1149,14 +1459,24 @@
       if (!response.ok) {
         setStatus(payload.error || "Paint request failed.", true);
         // Re-sync after server rejection so optimistic local state does not drift.
+        state.pendingPaints = Math.max(0, state.pendingPaints - 1);
+        state.pendingXp = Math.max(0, state.pendingXp - optimisticXpGain);
+        recomputeXpFromServer();
         await loadCanvas();
+        await loadLimits();
+        updateUsage();
         return;
       }
 
-      state.remainingPaints = payload.remainingPaints;
+      state.pendingPaints = Math.max(0, state.pendingPaints - 1);
+      state.serverRemainingPaints = typeof payload.remainingPaints === "number" ? payload.remainingPaints : state.serverRemainingPaints;
+      state.pendingXp = Math.max(0, state.pendingXp - optimisticXpGain);
+      if (typeof payload.xp === "number") {
+        state.serverXp = payload.xp;
+      }
+      recomputeRemainingPaints();
+      recomputeXpFromServer();
       if (currentUser && Number.isFinite(Number(payload.xp)) && Number.isFinite(Number(payload.level))) {
-        currentUser.xp = Number(payload.xp);
-        currentUser.level = Number(payload.level);
         if (Number.isFinite(Number(payload.paletteTokens))) {
           currentUser.palette_tokens = Number(payload.paletteTokens);
         }
@@ -1174,6 +1494,11 @@
       updateUsage();
     }).catch(() => {
       setStatus("Paint request failed.", true);
+      state.pendingPaints = Math.max(0, state.pendingPaints - 1);
+      state.pendingXp = Math.max(0, state.pendingXp - optimisticXpGain);
+      recomputeRemainingPaints();
+      recomputeXpFromServer();
+      updateUsage();
     });
   }
 
@@ -1191,6 +1516,35 @@
       draw();
       setStatus("Canvas was reset by admin.");
     });
+  }
+
+  function showZoomIndicator() {
+    const userFloorScale = state.maxScale * USER_MIN_ZOOM_RATIO;
+    const zoomRange = Math.max(0.0001, state.maxScale - userFloorScale);
+    const progress = Math.max(0, Math.min(1, (state.scale - userFloorScale) / zoomRange));
+
+    if (zoomIndicatorEl) {
+      if (zoomIndicatorFillEl) {
+        zoomIndicatorFillEl.style.width = `${Math.round(progress * 100)}%`;
+      }
+      zoomIndicatorEl.hidden = false;
+      zoomIndicatorEl.style.opacity = "1";
+
+      if (state.zoomIndicatorTimeout) {
+        clearTimeout(state.zoomIndicatorTimeout);
+      }
+
+      state.zoomIndicatorTimeout = setTimeout(() => {
+        if (zoomIndicatorEl) {
+          zoomIndicatorEl.style.opacity = "0";
+          setTimeout(() => {
+            if (zoomIndicatorEl) {
+              zoomIndicatorEl.hidden = true;
+            }
+          }, 300);
+        }
+      }, 800);
+    }
   }
 
   function bindEvents() {
@@ -1214,6 +1568,51 @@
       brushLabel.textContent = String(newSize);
     });
 
+    // Two-finger touch pan
+    canvas.addEventListener("touchstart", (event) => {
+      if (event.touches.length === 2) {
+        const touch1 = event.touches[0];
+        const touch2 = event.touches[1];
+        const dx = touch1.clientX - touch2.clientX;
+        const dy = touch1.clientY - touch2.clientY;
+        state.lastTouchDistance = Math.sqrt(dx * dx + dy * dy);
+      }
+    });
+
+    canvas.addEventListener("touchmove", (event) => {
+      if (event.touches.length === 2) {
+        event.preventDefault();
+        const touch1 = event.touches[0];
+        const touch2 = event.touches[1];
+
+        // Calculate mid-point between two fingers
+        const midX = (touch1.clientX + touch2.clientX) / 2;
+        const midY = (touch1.clientY + touch2.clientY) / 2;
+
+        // Simple pan: track movement of the touch centroid
+        if (!state.touchPanStartX) {
+          state.touchPanStartX = midX;
+          state.touchPanStartY = midY;
+        } else {
+          const panDeltaX = midX - state.touchPanStartX;
+          const panDeltaY = midY - state.touchPanStartY;
+          state.offsetX += panDeltaX;
+          state.offsetY += panDeltaY;
+          state.touchPanStartX = midX;
+          state.touchPanStartY = midY;
+          scheduleDraw();
+        }
+      }
+    });
+
+    canvas.addEventListener("touchend", (event) => {
+      if (event.touches.length < 2) {
+        state.lastTouchDistance = 0;
+        state.touchPanStartX = null;
+        state.touchPanStartY = null;
+      }
+    });
+
     // Keyboard controls for zoom and color selection
     window.addEventListener("keydown", (event) => {
       if (event.key === "Control" && !state.ctrlPressed) {
@@ -1229,9 +1628,10 @@
         const my = rect.height / 2;
         const worldX = (mx - state.offsetX) / state.scale;
         const worldY = (my - state.offsetY) / state.scale;
-        state.scale = Math.max(state.minScale, Math.min(state.maxScale, state.scale * 1.15));
+        state.scale = Math.max(getMinScaleForViewer(), Math.min(state.maxScale, state.scale * 1.15));
         state.offsetX = mx - worldX * state.scale;
         state.offsetY = my - worldY * state.scale;
+        showZoomIndicator();
         scheduleDraw();
         return;
       }
@@ -1243,9 +1643,10 @@
         const my = rect.height / 2;
         const worldX = (mx - state.offsetX) / state.scale;
         const worldY = (my - state.offsetY) / state.scale;
-        state.scale = Math.max(state.minScale, Math.min(state.maxScale, state.scale * 0.85));
+        state.scale = Math.max(getMinScaleForViewer(), Math.min(state.maxScale, state.scale / 1.15));
         state.offsetX = mx - worldX * state.scale;
         state.offsetY = my - worldY * state.scale;
+        showZoomIndicator();
         scheduleDraw();
         return;
       }
@@ -1426,6 +1827,44 @@
       paletteStoreClose.addEventListener("click", closePaletteStore);
     }
 
+    if (openTutorialBtn) {
+      openTutorialBtn.addEventListener("click", () => {
+        openTutorialModal(true);
+      });
+    }
+
+    if (tutorialBackdrop) {
+      tutorialBackdrop.addEventListener("click", closeTutorialModal);
+    }
+
+    if (tutorialClose) {
+      tutorialClose.addEventListener("click", closeTutorialModal);
+    }
+
+    if (paletteTutorialModal) {
+      const openPaletteTutorialBtn = document.getElementById("open-palette-tutorial");
+      if (openPaletteTutorialBtn) {
+        openPaletteTutorialBtn.addEventListener("click", openPaletteTutorialModal);
+      }
+    }
+
+    if (paletteTutorialBackdrop) {
+      paletteTutorialBackdrop.addEventListener("click", closePaletteTutorialModal);
+    }
+
+    if (paletteTutorialClose) {
+      paletteTutorialClose.addEventListener("click", closePaletteTutorialModal);
+    }
+
+    window.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && tutorialModal && !tutorialModal.hidden) {
+        closeTutorialModal();
+      }
+      if (event.key === "Escape" && paletteTutorialModal && !paletteTutorialModal.hidden) {
+        closePaletteTutorialModal();
+      }
+    });
+
     if (guestPaintClose) {
       guestPaintClose.addEventListener("click", closeGuestPaintModal);
     }
@@ -1472,7 +1911,9 @@
 
     await loadLimits();
 
+    initializeHomeView();
     connectSocket();
+    maybeOpenFirstStartTutorial();
     updateUsage();
   }
 

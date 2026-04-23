@@ -4,8 +4,9 @@
     <div class="auth-block">
       <a href="/" class="home-button">Home</a>
       <button type="button" id="open-palette-store" class="home-button">Palette Store</button>
+      <button type="button" id="open-palette-tutorial" class="home-help-button" aria-label="Palette help">?</button>
       {{#if isAuthenticated}}
-        <span class="user-email">{{#if user.displayName}}{{user.displayName}}{{else}}{{user.email}}{{/if}}</span>
+        <a href="/profile" class="user-profile-link">{{#if user.displayName}}{{user.displayName}}{{else}}{{user.email}}{{/if}}</a>
         <form method="POST" action="/auth/logout">
           <button type="submit">Logout</button>
         </form>
@@ -45,6 +46,10 @@
   </section>
 
   <section class="canvas-shell">
+    <button type="button" id="open-tutorial" class="canvas-help-button" aria-label="Open tutorial">?</button>
+    <div id="zoom-indicator" class="zoom-indicator" hidden>
+      <div id="zoom-indicator-fill" class="zoom-indicator-fill"></div>
+    </div>
     <canvas id="pixel-canvas"></canvas>
   </section>
 
@@ -63,6 +68,7 @@
         <button type="button" data-interaction-type="ban">Ban</button>
         <button type="button" data-interaction-type="friend">Add Friend</button>
         <button type="button" data-interaction-type="name">Name</button>
+        <button type="button" data-interaction-type="set-home">Set Home</button>
         <button type="button" data-interaction-type="visit-profile">Visit Profile</button>
       </div>
       <div id="interaction-auth-links" class="interaction-auth-links" hidden>
@@ -81,6 +87,59 @@
       <p id="palette-store-summary" class="interaction-summary"></p>
       <div id="palette-store-grid" class="palette-store-grid"></div>
       <button type="button" id="palette-store-close" class="interaction-close">Close</button>
+    </div>
+  </section>
+
+  <div id="tutorial-backdrop" class="interaction-backdrop" hidden></div>
+  <section id="tutorial-modal" class="interaction-modal" aria-hidden="true" hidden>
+    <div class="interaction-card tutorial-card">
+      <p class="interaction-kicker">Quick Start</p>
+      <h2>Canvas Guide</h2>
+      <div class="tutorial-section">
+        <h3>Canvas Controls</h3>
+        <ul>
+          <li>Left click and drag to paint.</li>
+          <li>Use Erase mode to clear pixels.</li>
+          <li>Right click and drag to pan around the canvas.</li>
+          <li>Use + and - to zoom in and out.</li>
+          <li>Use mouse wheel over the canvas to change brush size.</li>
+        </ul>
+      </div>
+      <div class="tutorial-section">
+        <h3>Protected Groups</h3>
+        <ul>
+          <li>Click protected labels to open interaction options.</li>
+          <li>Hold Ctrl to reveal your own protected labels and tools.</li>
+        </ul>
+      </div>
+      <button type="button" id="tutorial-close" class="interaction-close">Got It</button>
+    </div>
+  </section>
+
+  <div id="palette-tutorial-backdrop" class="interaction-backdrop" hidden></div>
+  <section id="palette-tutorial-modal" class="interaction-modal" aria-hidden="true" hidden>
+    <div class="interaction-card tutorial-card">
+      <p class="interaction-kicker">Colors & Palettes</p>
+      <h2>Palettes</h2>
+      <p id="palette-tutorial-summary" class="interaction-summary"></p>
+      <div class="tutorial-section">
+        <h3>Palette Tokens</h3>
+        <ul>
+          <li>You start with 1 palette token.</li>
+          <li>Earn 1 token each time you level up.</li>
+          <li>Use tokens to unlock new color palettes.</li>
+        </ul>
+      </div>
+      <div class="tutorial-section">
+        <h3>Using Palettes</h3>
+        <ul>
+          <li>Open Palette Store from the top bar to browse palettes.</li>
+          <li>Click a palette to select it or unlock it with a token.</li>
+          <li>Use the Palette dropdown to switch between your unlocked palettes.</li>
+          <li>Use number keys and QWERTY keys to pick colors quickly.</li>
+        </ul>
+      </div>
+      <button type="button" id="palette-tutorial-close" class="interaction-close">Got It</button>
     </div>
   </section>
 
@@ -106,4 +165,27 @@
   window.APP_USER = {{json user}};
   window.APP_AUTHENTICATED = {{json isAuthenticated}};
   window.APP_IS_ADMIN = {{json isAdmin}};
+
+  // Palette help button
+  document.getElementById('open-palette-tutorial').addEventListener('click', () => {
+    const modal = document.getElementById('palette-tutorial-modal');
+    const backdrop = document.getElementById('palette-tutorial-backdrop');
+    modal.removeAttribute('hidden');
+    backdrop.removeAttribute('hidden');
+    modal.setAttribute('aria-hidden', 'false');
+  });
+
+  document.getElementById('palette-tutorial-close').addEventListener('click', () => {
+    const modal = document.getElementById('palette-tutorial-modal');
+    const backdrop = document.getElementById('palette-tutorial-backdrop');
+    modal.setAttribute('hidden', '');
+    backdrop.setAttribute('hidden', '');
+    modal.setAttribute('aria-hidden', 'true');
+  });
+
+  document.getElementById('palette-tutorial-backdrop').addEventListener('click', (e) => {
+    if (e.target.id === 'palette-tutorial-backdrop') {
+      document.getElementById('palette-tutorial-close').click();
+    }
+  });
 </script>

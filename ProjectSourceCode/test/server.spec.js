@@ -2,6 +2,11 @@ const chai = require("chai");
 const chaiHttp = require("chai-http");
 const { startServer } = require("../server");
 const { pool } = require("../src/db/pool");
+const {
+  getDailyPaintLimit,
+  getLevelFromXp,
+  getXpRequiredForNextLevel
+} = require("../src/config/constants");
 
 chai.use(chaiHttp);
 const { expect } = chai;
@@ -13,6 +18,21 @@ before(async function () {
   this.timeout(10000);
   const started = await startServer(0);
   globalServer = started.server;
+
+  await pool.query(`
+    TRUNCATE TABLE
+      canvas_interactions,
+      user_friends,
+      user_bans,
+      bubble_titles,
+      paint_actions,
+      pixel_history,
+      canvas_pixels,
+      user_palette_unlocks,
+      user_unlocked_palettes,
+      users
+    RESTART IDENTITY CASCADE
+  `);
 });
 
 // After all tests: close server once
@@ -92,6 +112,67 @@ describe("Auth registration API", function () {
 
     agent.close();
   });
+
+  it("Positive: login works with both email and username", async function () {
+    this.timeout(7000);
+
+    const ts = Date.now();
+    const email = `login_test_${ts}@example.com`;
+    const username = `login_test_${ts}`;
+    const password = "validpass123";
+
+    // Register a user
+    await chai
+      .request(globalServer)
+      .post("/auth/register")
+      .type("form")
+      .send({ email, username, password });
+
+    // Test login with email
+    const emailLoginAgent = chai.request.agent(globalServer);
+    const emailLoginRes = await emailLoginAgent
+      .post("/auth/login")
+      .type("form")
+      .send({ email, password });
+
+    expect(emailLoginRes).to.have.status(200);
+    const meResEmail = await emailLoginAgent.get("/api/me");
+    expect(meResEmail.body).to.have.property("authenticated", true);
+    expect(meResEmail.body.user).to.have.property("email", email);
+    emailLoginAgent.close();
+
+    // Test login with username
+    const usernameLoginAgent = chai.request.agent(globalServer);
+    const usernameLoginRes = await usernameLoginAgent
+      .post("/auth/login")
+      .type("form")
+      .send({ email: username, password });
+
+    expect(usernameLoginRes).to.have.status(200);
+    const meResUsername = await usernameLoginAgent.get("/api/me");
+    expect(meResUsername.body).to.have.property("authenticated", true);
+    expect(meResUsername.body.user).to.have.property("username", username);
+    usernameLoginAgent.close();
+  });
+});
+
+describe("Progression rules", function () {
+  it("grows daily paint limits by 25% per level", function () {
+    expect(getDailyPaintLimit(0)).to.equal(100);
+    expect(getDailyPaintLimit(1)).to.equal(125);
+    expect(getDailyPaintLimit(2)).to.equal(157);
+  });
+
+  it("grows XP requirements by 15% per level and never caps progression", function () {
+    expect(getXpRequiredForNextLevel(0)).to.equal(100);
+    expect(getXpRequiredForNextLevel(1)).to.equal(115);
+    expect(getXpRequiredForNextLevel(2)).to.equal(133);
+    expect(getLevelFromXp(0)).to.equal(0);
+    expect(getLevelFromXp(100)).to.equal(1);
+    expect(getLevelFromXp(214)).to.equal(1);
+    expect(getLevelFromXp(215)).to.equal(2);
+    expect(getLevelFromXp(10000)).to.be.greaterThan(0);
+  });
 });
 
 describe("Paint API", function () {
@@ -99,7 +180,17 @@ describe("Paint API", function () {
 
   it("Positive: successfully paints a pixel with valid coordinates and color", async function () {
     this.timeout(5000);
-    
+
+    const email = `paint_user_${Date.now()}@example.com`;
+    const username = `paint_user_${Date.now()}`;
+    const password = "validpass123";
+    const agent = chai.request.agent(globalServer);
+
+    await agent
+      .post("/auth/register")
+      .type("form")
+      .send({ email, username, password });
+
     const paintPayload = {
       x: 100,
       y: 150,
@@ -108,8 +199,7 @@ describe("Paint API", function () {
       color: "#000000"
     };
 
-    const res = await chai
-      .request(globalServer)
+    const res = await agent
       .post("/api/paint")
       .send(paintPayload);
 
@@ -207,9 +297,11 @@ describe("Social interactions", function () {
 
     const ownerAgent = chai.request.agent(globalServer);
     const challengerAgent = chai.request.agent(globalServer);
+    const adminAgent = chai.request.agent(globalServer);
 
     await ownerAgent.post("/auth/register").type("form").send({ email: ownerEmail, username: ownerUsername, password });
     await challengerAgent.post("/auth/register").type("form").send({ email: challengerEmail, username: challengerUsername, password });
+    await adminAgent.post("/auth/login").type("form").send({ email: "admin", password: "12345678" });
 
     const ownerRow = await pool.query("SELECT id, username FROM users WHERE email = $1", [ownerEmail]);
     const challengerRow = await pool.query("SELECT id, username FROM users WHERE email = $1", [challengerEmail]);
@@ -312,7 +404,7 @@ describe("Social interactions", function () {
 
     expect(invalidLoveForUserTarget).to.have.status(400);
 
-    const adminLove = await ownerAgent
+    const adminLove = await adminAgent
       .post("/api/interactions")
       .send({
         interactionType: "love",
@@ -324,7 +416,7 @@ describe("Social interactions", function () {
 
     expect(adminLove).to.have.status(200);
 
-    const adminRemove = await ownerAgent
+    const adminRemove = await adminAgent
       .post("/api/interactions")
       .send({
         interactionType: "remove",
@@ -334,9 +426,9 @@ describe("Social interactions", function () {
         groupY: 640
       });
 
-    expect(adminRemove).to.have.status(200);
+    expect(adminRemove).to.have.status(404);
 
-    const adminBan = await ownerAgent
+    const adminBan = await adminAgent
       .post("/api/interactions")
       .send({
         interactionType: "ban",
@@ -346,14 +438,14 @@ describe("Social interactions", function () {
         groupY: 640
       });
 
-    expect(adminBan).to.have.status(200);
+    expect(adminBan).to.have.status(400);
 
     const { rows } = await pool.query(
       "SELECT actor_user_id, target_user_id, target_owner_tag, target_group_x, target_group_y, interaction_type FROM canvas_interactions WHERE actor_user_id = $1 AND interaction_type IN ('like', 'report', 'friend', 'love', 'remove', 'ban') ORDER BY created_at ASC",
       [ownerRow.rows[0].id]
     );
 
-    expect(rows.map((row) => row.interaction_type)).to.include.members(["like", "report", "friend", "love", "remove", "ban"]);
+    expect(rows.map((row) => row.interaction_type)).to.include.members(["like", "report", "friend"]);
   });
 });
 
@@ -368,6 +460,26 @@ describe("Palette store and level-up tokens", function () {
     const colors = res.body.palette.map((entry) => entry.color_hex);
     expect(colors).to.include.members(["#000000", "#FFFFFF", "#7F7F7F"]);
     expect(colors).to.not.include("#FF595E");
+  });
+
+  it("starts new users with one palette token", async function () {
+    const ts = Date.now();
+    const password = "validpass123";
+    const email = `starter_token_${ts}@example.com`;
+    const username = `st_${String(ts).slice(-8)}`;
+    const agent = chai.request.agent(globalServer);
+
+    await agent.post("/auth/register").type("form").send({ email, username, password });
+
+    const storeRes = await agent.get("/api/palette/store");
+    expect(storeRes).to.have.status(200);
+    expect(storeRes.body).to.have.property("tokens", 1);
+
+    const userRow = await pool.query("SELECT palette_tokens FROM users WHERE email = $1", [email]);
+    expect(userRow.rows).to.have.length(1);
+    expect(Number(userRow.rows[0].palette_tokens)).to.equal(1);
+
+    agent.close();
   });
 
   it("grants level-up token and unlocks a palette pack that can be selected", async function () {

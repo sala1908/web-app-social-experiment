@@ -1,0 +1,89 @@
+<main class="page profile-page">
+  <header class="topbar">
+    <h1><a class="home-link" href="/">Web-E-Vil</a></h1>
+    <div class="auth-block">
+      <a href="/" class="home-button">Canvas</a>
+      <a href="/profile" class="user-profile-link is-current" aria-current="page">{{profile.displayName}}</a>
+      <form method="POST" action="/auth/logout">
+        <button type="submit">Logout</button>
+      </form>
+    </div>
+  </header>
+
+  <section class="profile-hero">
+    <div>
+      <p class="profile-kicker">Account profile</p>
+      <h2>{{profile.displayName}}</h2>
+      <p class="profile-subtitle">{{profile.accountAgeLabel}} · {{profile.joinedOnLabel}}</p>
+    </div>
+    <div class="profile-hero-stats">
+      <div class="profile-stat">
+        <span>Total likes</span>
+        <strong>{{profile.totalLikes}}</strong>
+      </div>
+      <div class="profile-stat">
+        <span>Level</span>
+        <strong>{{profile.level}}</strong>
+      </div>
+      <div class="profile-stat">
+        <span>XP</span>
+        <strong>{{profile.xp}}</strong>
+      </div>
+      <div class="profile-stat">
+        <span>Friends</span>
+        <strong>{{profile.friendCount}}</strong>
+      </div>
+    </div>
+  </section>
+
+  <section class="profile-grid">
+    <article class="profile-card">
+      <h3>Friends List</h3>
+      {{#if profile.friends.length}}
+        <ul class="profile-friend-list">
+          {{#each profile.friends}}
+            <li>
+              <div class="profile-friend-main">
+                <strong>{{displayName}}</strong>
+                <span>{{joinedOnLabel}}</span>
+              </div>
+              <span class="profile-friend-email">{{email}}</span>
+            </li>
+          {{/each}}
+        </ul>
+      {{else}}
+        <p class="profile-empty">No friends yet. Use the canvas interactions to start connecting with other players.</p>
+      {{/if}}
+    </article>
+
+    <article class="profile-card profile-card--wide">
+      <h3>Unlocked Palettes</h3>
+      {{#if profile.unlockedPalettes.length}}
+        <div class="profile-palette-grid">
+          {{#each profile.unlockedPalettes}}
+            <div class="profile-palette-card{{#if isSelected}} is-selected{{/if}}">
+              <div class="profile-palette-header">
+                <div>
+                  <strong>{{name}}</strong>
+                  <p>{{description}}</p>
+                </div>
+                {{#if isStarter}}
+                  <span class="profile-badge">Starter</span>
+                {{else}}
+                  <span class="profile-badge profile-badge--locked">Unlocked</span>
+                {{/if}}
+              </div>
+              <div class="profile-palette-swatches">
+                {{#each colors}}
+                  <span class="profile-palette-swatch" style="background-color: {{this}};"></span>
+                {{/each}}
+              </div>
+            </div>
+          {{/each}}
+        </div>
+      {{else}}
+        <p class="profile-empty">No palettes were found for this account.</p>
+      {{/if}}
+    </article>
+  </section>
+</main>

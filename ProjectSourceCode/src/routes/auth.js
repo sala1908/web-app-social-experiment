@@ -38,9 +38,11 @@ router.post("/register", async (req, res) => {
     }
 
     const passwordHash = await bcrypt.hash(password, 12);
+    const homeX = Math.floor(Math.random() * 1024);
+    const homeY = Math.floor(Math.random() * 1024);
     const { rows } = await pool.query(
-      "INSERT INTO users (email, username, password_hash) VALUES ($1, $2, $3) RETURNING id, email, username",
-      [email, username, passwordHash]
+      "INSERT INTO users (email, username, password_hash, palette_tokens, home_x, home_y) VALUES ($1, $2, $3, 1, $4, $5) RETURNING id, email, username",
+      [email, username, passwordHash, homeX, homeY]
     );
 
     req.session.userId = rows[0].id;
@@ -56,10 +58,10 @@ router.post("/register", async (req, res) => {
 });
 
 router.post("/login", async (req, res) => {
-  const email = (req.body.email || "").trim().toLowerCase();
+  const credential = (req.body.email || "").trim().toLowerCase();
   const password = req.body.password || "";
 
-  if (email === ADMIN_USERNAME && password === ADMIN_PASSWORD) {
+  if (credential === ADMIN_USERNAME && password === ADMIN_PASSWORD) {
     req.session.userId = null;
     req.session.isAdmin = true;
     req.session.adminUsername = ADMIN_USERNAME;
@@ -68,11 +70,15 @@ router.post("/login", async (req, res) => {
   }
 
   try {
-    const { rows } = await pool.query("SELECT id, email, username, password_hash FROM users WHERE email = $1", [email]);
+    const { rows } = await pool.query("SELECT id, email, username, password_hash, banned FROM users WHERE LOWER(email) = $1 OR LOWER(username) = $1", [credential]);
     const user = rows[0];
 
     if (!user) {
       return res.status(401).render("login", { title: "Login", error: "Invalid credentials." });
+    }
+
+    if (user.banned) {
+      return res.status(403).render("login", { title: "Login", error: "Your account has been banned." });
     }
 
     const passwordOk = await bcrypt.compare(password, user.password_hash);
