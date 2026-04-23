@@ -37,8 +37,11 @@
   const interactionAuthLinks = document.getElementById("interaction-auth-links");
   const adminResetCanvasBtn = document.getElementById("admin-reset-canvas");
   const adminResetLimitsBtn = document.getElementById("admin-reset-limits");
+  const zoomIndicatorEl = document.getElementById("zoom-indicator");
+  const zoomIndicatorFillEl = document.getElementById("zoom-indicator-fill");
 
   const cfg = window.APP_CONFIG || { gridSize: 1024, maxBrushSize: 5 };
+  const USER_MIN_ZOOM_RATIO = 0.1;
   let isAdmin = window.APP_IS_ADMIN === true
     || String(window.APP_IS_ADMIN).toLowerCase() === "true"
     || Boolean(window.APP_USER && window.APP_USER.isAdmin)
@@ -220,6 +223,10 @@
     }
   }
 
+  function getMinScaleForViewer() {
+    return isAdmin ? state.minScale : state.maxScale * USER_MIN_ZOOM_RATIO;
+  }
+
   const state = {
     mode: "paint",
     brushSize: 1,
@@ -251,7 +258,11 @@
     selectedPaletteName: "Starter Classic",
     unlockedPaletteIds: ["starter_classic"],
     availablePalettes: [],
-    paletteStoreItems: []
+    paletteStoreItems: [],
+    zoomIndicatorTimeout: null,
+    lastTouchDistance: 0,
+    touchPanStartX: null,
+    touchPanStartY: null
   };
 
   let socket = null;
@@ -682,7 +693,7 @@
     const actionButtons = Array.from(interactionModal.querySelectorAll("[data-interaction-type]"));
 
     const visibleActions = isOwnGroup
-      ? (state.ctrlPressed && authenticated ? ["remove", "name"] : [])
+      ? (state.ctrlPressed && authenticated ? ["remove", "name", "set-home"] : [])
       : viewerRole === "guest"
       ? []
       : viewerRole === "admin"
@@ -963,6 +974,50 @@
     if (interactionType === "visit-profile") {
       setStatus("Visit Profile coming soon.");
       return;
+    }
+
+    if (interactionType === "set-home") {
+      if (!authenticated || viewerRole === "guest") {
+        setStatus("You must be logged in to set your home.", true);
+        return;
+      }
+
+      // Get the world coordinates of the canvas center
+      const rect = canvas.getBoundingClientRect();
+      const centerScreenX = rect.width / 2;
+      const centerScreenY = rect.height / 2;
+      const homeX = Math.round((centerScreenX - state.offsetX) / state.scale);
+      const homeY = Math.round((centerScreenY - state.offsetY) / state.scale);
+
+      // Clamp to grid bounds
+      const clampedHomeX = Math.max(0, Math.min(1023, homeX));
+      const clampedHomeY = Math.max(0, Math.min(1023, homeY));
+
+      try {
+        const response = await fetch("/api/me/home", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ home_x: clampedHomeX, home_y: clampedHomeY })
+        });
+
+        const payload = await response.json();
+        if (!response.ok) {
+          setStatus(payload.error || "Unable to set home.", true);
+          return;
+        }
+
+        if (currentUser) {
+          currentUser.home_x = clampedHomeX;
+          currentUser.home_y = clampedHomeY;
+        }
+
+        setStatus("Home location set! This will be your starting point next time.", false);
+        closeInteractionModal();
+        return;
+      } catch (error) {
+        setStatus("Error setting home: " + error.message, true);
+        return;
+      }
     }
 
     if (interactionType === "name") {
@@ -1264,6 +1319,25 @@
     }
   }
 
+  function initializeHomeView() {
+    // Calculate starting zoom: 2 steps less than maxScale
+    // Each step multiplies/divides by 1.15
+    const startScale = state.maxScale / (1.15 * 1.15);
+    state.scale = Math.max(getMinScaleForViewer(), Math.min(state.maxScale, startScale));
+
+    // Get home coordinates from currentUser
+    const homeX = currentUser && Number.isFinite(Number(currentUser.home_x)) ? Number(currentUser.home_x) : 512;
+    const homeY = currentUser && Number.isFinite(Number(currentUser.home_y)) ? Number(currentUser.home_y) : 512;
+
+    // Calculate offsetX and offsetY to center on home coordinates
+    const rect = canvas.getBoundingClientRect();
+    const centerX = rect.width / 2;
+    const centerY = rect.height / 2;
+
+    state.offsetX = centerX - homeX * state.scale;
+    state.offsetY = centerY - homeY * state.scale;
+  }
+
   async function selectPalette(paletteId) {
     const response = await fetch("/api/palette/select", {
       method: "POST",
@@ -1444,6 +1518,35 @@
     });
   }
 
+  function showZoomIndicator() {
+    const userFloorScale = state.maxScale * USER_MIN_ZOOM_RATIO;
+    const zoomRange = Math.max(0.0001, state.maxScale - userFloorScale);
+    const progress = Math.max(0, Math.min(1, (state.scale - userFloorScale) / zoomRange));
+
+    if (zoomIndicatorEl) {
+      if (zoomIndicatorFillEl) {
+        zoomIndicatorFillEl.style.width = `${Math.round(progress * 100)}%`;
+      }
+      zoomIndicatorEl.hidden = false;
+      zoomIndicatorEl.style.opacity = "1";
+
+      if (state.zoomIndicatorTimeout) {
+        clearTimeout(state.zoomIndicatorTimeout);
+      }
+
+      state.zoomIndicatorTimeout = setTimeout(() => {
+        if (zoomIndicatorEl) {
+          zoomIndicatorEl.style.opacity = "0";
+          setTimeout(() => {
+            if (zoomIndicatorEl) {
+              zoomIndicatorEl.hidden = true;
+            }
+          }, 300);
+        }
+      }, 800);
+    }
+  }
+
   function bindEvents() {
     window.addEventListener("resize", resizeCanvas);
     canvas.addEventListener("contextmenu", (event) => event.preventDefault());
@@ -1465,6 +1568,51 @@
       brushLabel.textContent = String(newSize);
     });
 
+    // Two-finger touch pan
+    canvas.addEventListener("touchstart", (event) => {
+      if (event.touches.length === 2) {
+        const touch1 = event.touches[0];
+        const touch2 = event.touches[1];
+        const dx = touch1.clientX - touch2.clientX;
+        const dy = touch1.clientY - touch2.clientY;
+        state.lastTouchDistance = Math.sqrt(dx * dx + dy * dy);
+      }
+    });
+
+    canvas.addEventListener("touchmove", (event) => {
+      if (event.touches.length === 2) {
+        event.preventDefault();
+        const touch1 = event.touches[0];
+        const touch2 = event.touches[1];
+
+        // Calculate mid-point between two fingers
+        const midX = (touch1.clientX + touch2.clientX) / 2;
+        const midY = (touch1.clientY + touch2.clientY) / 2;
+
+        // Simple pan: track movement of the touch centroid
+        if (!state.touchPanStartX) {
+          state.touchPanStartX = midX;
+          state.touchPanStartY = midY;
+        } else {
+          const panDeltaX = midX - state.touchPanStartX;
+          const panDeltaY = midY - state.touchPanStartY;
+          state.offsetX += panDeltaX;
+          state.offsetY += panDeltaY;
+          state.touchPanStartX = midX;
+          state.touchPanStartY = midY;
+          scheduleDraw();
+        }
+      }
+    });
+
+    canvas.addEventListener("touchend", (event) => {
+      if (event.touches.length < 2) {
+        state.lastTouchDistance = 0;
+        state.touchPanStartX = null;
+        state.touchPanStartY = null;
+      }
+    });
+
     // Keyboard controls for zoom and color selection
     window.addEventListener("keydown", (event) => {
       if (event.key === "Control" && !state.ctrlPressed) {
@@ -1480,9 +1628,10 @@
         const my = rect.height / 2;
         const worldX = (mx - state.offsetX) / state.scale;
         const worldY = (my - state.offsetY) / state.scale;
-        state.scale = Math.max(state.minScale, Math.min(state.maxScale, state.scale * 1.15));
+        state.scale = Math.max(getMinScaleForViewer(), Math.min(state.maxScale, state.scale * 1.15));
         state.offsetX = mx - worldX * state.scale;
         state.offsetY = my - worldY * state.scale;
+        showZoomIndicator();
         scheduleDraw();
         return;
       }
@@ -1494,9 +1643,10 @@
         const my = rect.height / 2;
         const worldX = (mx - state.offsetX) / state.scale;
         const worldY = (my - state.offsetY) / state.scale;
-        state.scale = Math.max(state.minScale, Math.min(state.maxScale, state.scale * 0.85));
+        state.scale = Math.max(getMinScaleForViewer(), Math.min(state.maxScale, state.scale / 1.15));
         state.offsetX = mx - worldX * state.scale;
         state.offsetY = my - worldY * state.scale;
+        showZoomIndicator();
         scheduleDraw();
         return;
       }
@@ -1761,6 +1911,7 @@
 
     await loadLimits();
 
+    initializeHomeView();
     connectSocket();
     maybeOpenFirstStartTutorial();
     updateUsage();

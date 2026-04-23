@@ -84,7 +84,7 @@ function createApp() {
     }
 
     try {
-      const { rows } = await pool.query("SELECT id, email, username, xp, level, palette_tokens, selected_palette_id, tutorial_seen, banned, daily_limit_override FROM users WHERE id = $1", [req.session.userId]);
+      const { rows } = await pool.query("SELECT id, email, username, xp, level, palette_tokens, selected_palette_id, tutorial_seen, banned, daily_limit_override, home_x, home_y FROM users WHERE id = $1", [req.session.userId]);
       
       if (rows.length === 0) {
         return next();

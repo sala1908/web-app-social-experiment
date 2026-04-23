@@ -516,7 +516,7 @@ router.get("/canvas", async (req, res, next) => {
 router.get("/me", (req, res) => {
   const isAdmin = Boolean(req.session && req.session.isAdmin);
   const customUser = isAdmin
-    ? { id: null, username: "Admin", email: null, xp: 0, level: 0, palette_tokens: 999, selected_palette_id: req.session.adminPaletteId || STARTER_PALETTE_ID, tutorial_seen: true, isAdmin: true }
+    ? { id: null, username: "Admin", email: null, xp: 0, level: 0, palette_tokens: 999, selected_palette_id: req.session.adminPaletteId || STARTER_PALETTE_ID, tutorial_seen: true, home_x: 512, home_y: 512, isAdmin: true }
     : req.user || null;
 
   return res.json({
@@ -1568,6 +1568,39 @@ router.post("/admin/level-config", requireAdmin, async (req, res, next) => {
     require("fs").writeFileSync(require("path").resolve(__dirname, "../config/constants.js"), constantsContent);
 
     return res.json({ ok: true, message: "Config updated. Server restart required for changes to take effect." });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+router.post("/me/home", requireAuth, async (req, res, next) => {
+  try {
+    const userId = req.session && req.session.userId ? req.session.userId : null;
+    if (!userId) {
+      return res.status(401).json({ ok: false, error: "User context is missing." });
+    }
+
+    const homeX = Number(req.body.home_x);
+    const homeY = Number(req.body.home_y);
+
+    if (!Number.isFinite(homeX) || !Number.isFinite(homeY)) {
+      return res.status(400).json({ ok: false, error: "Invalid home coordinates" });
+    }
+
+    if (homeX < 0 || homeX >= 1024 || homeY < 0 || homeY >= 1024) {
+      return res.status(400).json({ ok: false, error: "Home coordinates out of bounds" });
+    }
+
+    const { rows } = await pool.query(
+      "UPDATE users SET home_x = $1, home_y = $2 WHERE id = $3 RETURNING home_x, home_y",
+      [homeX, homeY, userId]
+    );
+
+    if (rows.length === 0) {
+      return res.status(404).json({ ok: false, error: "User not found" });
+    }
+
+    return res.json({ ok: true, home_x: rows[0].home_x, home_y: rows[0].home_y });
   } catch (error) {
     return next(error);
   }

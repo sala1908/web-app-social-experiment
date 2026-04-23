@@ -273,6 +273,29 @@ body {
   animation: rise-in 640ms ease-out both;
 }
 
+#zoom-indicator {
+  position: absolute;
+  top: 18px;
+  left: 18px;
+  width: 132px;
+  height: 9px;
+  background: rgba(26, 26, 26, 0.2);
+  border: 1px solid rgba(26, 26, 26, 0.35);
+  border-radius: 999px;
+  z-index: 10;
+  pointer-events: none;
+  opacity: 1;
+  transition: opacity 300ms ease-out;
+}
+
+#zoom-indicator-fill {
+  width: 0;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #d95f02 0%, #f3c969 100%);
+  transition: width 120ms ease-out;
+}
+
 .canvas-help-button {
   position: absolute;
   top: 12px;

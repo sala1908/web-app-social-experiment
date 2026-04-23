@@ -47,6 +47,9 @@
 
   <section class="canvas-shell">
     <button type="button" id="open-tutorial" class="canvas-help-button" aria-label="Open tutorial">?</button>
+    <div id="zoom-indicator" class="zoom-indicator" hidden>
+      <div id="zoom-indicator-fill" class="zoom-indicator-fill"></div>
+    </div>
     <canvas id="pixel-canvas"></canvas>
   </section>
 
@@ -65,6 +68,7 @@
         <button type="button" data-interaction-type="ban">Ban</button>
         <button type="button" data-interaction-type="friend">Add Friend</button>
         <button type="button" data-interaction-type="name">Name</button>
+        <button type="button" data-interaction-type="set-home">Set Home</button>
         <button type="button" data-interaction-type="visit-profile">Visit Profile</button>
       </div>
       <div id="interaction-auth-links" class="interaction-auth-links" hidden>
