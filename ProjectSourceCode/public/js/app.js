@@ -693,12 +693,12 @@
     const actionButtons = Array.from(interactionModal.querySelectorAll("[data-interaction-type]"));
 
     const visibleActions = isOwnGroup
-      ? (state.ctrlPressed && authenticated ? ["remove", "name", "set-home"] : [])
+      ? (state.ctrlPressed && authenticated ? ["remove", "name", "set-home", "ai-guess"] : [])
       : viewerRole === "guest"
       ? []
       : viewerRole === "admin"
-        ? ["love", "remove", "ban"]
-        : ["like", "dislike", "report", "friend"].concat(isFriend ? ["visit-profile"] : []);
+        ? ["love", "remove", "ban", "ai-guess"]
+        : ["like", "dislike", "report", "friend", "ai-guess"].concat(isFriend ? ["visit-profile"] : []);
 
     actionButtons.forEach((button) => {
       const type = button.getAttribute("data-interaction-type");
@@ -968,6 +968,38 @@
 
   async function submitInteraction(interactionType) {
     if (!state.interactionGroup) {
+      return;
+    }
+
+    if (interactionType === "ai-guess") {
+      if (!authenticated || viewerRole === "guest") {
+        setStatus("You must be logged in to use AI Guess.", true);
+        return;
+      }
+
+      const targetGroup = state.interactionGroup;
+      const response = await fetch("/api/interactions/ai-guess", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          targetUserId: targetGroup.ownerId,
+          targetOwnerTag: targetGroup.tag,
+          groupX: targetGroup.x,
+          groupY: targetGroup.y,
+          size: targetGroup.size,
+          title: targetGroup.title || ""
+        })
+      });
+
+      const payload = await response.json();
+      if (!response.ok) {
+        setStatus(payload.error || "Unable to generate AI guess.", true);
+        return;
+      }
+
+      const guessText = String(payload.guess || "No guess available.").trim();
+      interactionSummary.textContent = `${interactionSummary.textContent} AI Guess: ${guessText}`;
+      setStatus("AI guess generated.", false);
       return;
     }
 

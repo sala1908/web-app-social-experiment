@@ -19,6 +19,7 @@ This project is a social drawing experiment built as a full-stack web applicatio
 - Daily paint limits that scale with level (base 100 at level 0, growth by level)
 - Full pixel edit history stored in PostgreSQL
 - Social interactions on canvas groups (like, dislike, report, friend, name, remove)
+- AI-assisted "AI Guess" action for protected bubbles
 - Protected space around user groups to prevent unauthorized overwrite
 - Admin controls for reset, moderation, and user progression management
 
@@ -66,6 +67,10 @@ This project is a social drawing experiment built as a full-stack web applicatio
    PORT=3000
    SESSION_SECRET=change-this-secret
    ADMIN_PASSWORD=change-this-admin-password
+   # Optional: enables live AI output for bubble guessing
+   OPENAI_API_KEY=
+   OPENAI_MODEL=gpt-4o-mini
+   OPENAI_API_URL=https://api.openai.com/v1/responses
    ```
 
 3. Start the application.

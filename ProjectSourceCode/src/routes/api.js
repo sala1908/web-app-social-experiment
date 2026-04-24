@@ -228,6 +228,93 @@ function normalizeDisplayName(value) {
   return text;
 }
 
+function fallbackBubbleGuess({ size, title }) {
+  const normalizedTitle = String(title || "").trim().toLowerCase();
+  const numericSize = Math.max(0, Number(size) || 0);
+
+  if (normalizedTitle.includes("tree") || normalizedTitle.includes("forest")) {
+    return "It could be a tree or a small forest icon.";
+  }
+
+  if (normalizedTitle.includes("heart") || normalizedTitle.includes("love")) {
+    return "It could be a heart symbol.";
+  }
+
+  if (normalizedTitle.includes("star") || normalizedTitle.includes("sun")) {
+    return "It could be a star or sun-like emblem.";
+  }
+
+  if (numericSize >= 180) {
+    return "It could be a large landscape scene or a banner-style artwork.";
+  }
+
+  if (numericSize >= 40) {
+    return "It could be a logo, symbol, or simple character sprite.";
+  }
+
+  return "It could be a tiny icon or marker-like object.";
+}
+
+async function getAiBubbleGuess({ ownerTag, size, title, groupX, groupY }) {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) {
+    return {
+      guess: fallbackBubbleGuess({ ownerTag, size, title }),
+      source: "fallback"
+    };
+  }
+
+  const model = process.env.OPENAI_MODEL || "gpt-4o-mini";
+  const apiUrl = process.env.OPENAI_API_URL || "https://api.openai.com/v1/responses";
+  const safeSize = Math.max(0, Number(size) || 0);
+  const safeTitle = String(title || "").trim() || "none";
+  const prompt = [
+    "You are an art guess assistant for a pixel canvas app.",
+    "Return one short plain-English guess (max 14 words) about what the drawn object could be.",
+    "Focus on object/category only (example: flower, spaceship, face, tree, house, logo).",
+    "Do not mention owner names, usernames, titles, coordinates, moderation, or social context.",
+    "If uncertain, still provide one concrete object guess.",
+    `Optional theme text: ${safeTitle}`,
+    `Approximate size in pixels: ${safeSize}`,
+    `Approximate coordinates: (${Number(groupX) || 0}, ${Number(groupY) || 0})`
+  ].join("\n");
+
+  try {
+    const response = await fetch(apiUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`
+      },
+      body: JSON.stringify({
+        model,
+        input: prompt,
+        max_output_tokens: 80
+      })
+    });
+
+    if (!response.ok) {
+      throw new Error(`AI API request failed with status ${response.status}`);
+    }
+
+    const payload = await response.json();
+    const rawGuess = String(payload.output_text || "").trim();
+    if (!rawGuess) {
+      throw new Error("AI API returned empty output_text");
+    }
+
+    return {
+      guess: rawGuess.slice(0, 220),
+      source: "ai"
+    };
+  } catch {
+    return {
+      guess: fallbackBubbleGuess({ size: safeSize, title: safeTitle === "none" ? "" : safeTitle }),
+      source: "fallback"
+    };
+  }
+}
+
 function buildBrushCells(x, y, brushSize) {
   const cells = [];
   const offset = -Math.floor((brushSize - 1) / 2);
@@ -986,6 +1073,40 @@ router.get("/interactions/context", async (req, res, next) => {
     }
 
     return res.json({ isFriend, bubbleTitle });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+router.post("/interactions/ai-guess", requireAuth, async (req, res, next) => {
+  const targetOwnerTag = String(req.body.targetOwnerTag || "").trim();
+  const groupX = Number(req.body.groupX);
+  const groupY = Number(req.body.groupY);
+  const size = Number(req.body.size);
+  const title = String(req.body.title || "").trim();
+
+  if (!targetOwnerTag) {
+    return res.status(400).json({ error: "Target owner is required." });
+  }
+
+  if (!Number.isInteger(groupX) || !Number.isInteger(groupY) || groupX < 0 || groupY < 0) {
+    return res.status(400).json({ error: "Target coordinates are invalid." });
+  }
+
+  try {
+    const result = await getAiBubbleGuess({
+      ownerTag: targetOwnerTag,
+      size,
+      title,
+      groupX,
+      groupY
+    });
+
+    return res.json({
+      ok: true,
+      guess: result.guess,
+      source: result.source
+    });
   } catch (error) {
     return next(error);
   }

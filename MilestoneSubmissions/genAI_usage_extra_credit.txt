@@ -1,0 +1,23 @@
+AI Guess Model Call Log
+Project: Web-E-Vil
+Date: 2026-04-24
+
+Feature Endpoint:
+POST /api/interactions/ai-guess
+
+Model API Request:
+POST https://api.openai.com/v1/responses
+
+Headers:
+Content-Type: application/json
+Authorization: Bearer <OPENAI_API_KEY>
+
+Body:
+{
+  "model": "gpt-4o-mini",
+  "input": "You are an art guess assistant for a pixel canvas app.\nReturn one short plain-English guess (max 14 words) about what the drawn object could be.\nFocus on object/category only (example: flower, spaceship, face, tree, house, logo).\nDo not mention owner names, usernames, titles, coordinates, moderation, or social context.\nIf uncertain, still provide one concrete object guess.\nOptional theme text: <bubble_title_or_none>\nApproximate size in pixels: <size>\nApproximate coordinates: (<x>, <y>)",
+  "max_output_tokens": 80
+}
+
+Expected Result:
+One short object guess, for example: "It could be a small tree icon." or "It could be a spaceship silhouette."
