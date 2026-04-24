@@ -14,9 +14,13 @@ This project is a social drawing experiment built as a full-stack web applicatio
 - Paint and erase tools with brush sizes from 1 to 5
 - Email and password authentication
 - Login required for painting and erasing
-- Per-user custom color palettes plus default shared colors
-- Daily paint limit of 50 actions per user
+- Starter palette plus unlockable palette store swatches
+- XP and level progression from painting, with level-up palette tokens
+- Daily paint limits that scale with level (base 100 at level 0, growth by level)
 - Full pixel edit history stored in PostgreSQL
+- Social interactions on canvas groups (like, dislike, report, friend, name, remove)
+- Protected space around user groups to prevent unauthorized overwrite
+- Admin controls for reset, moderation, and user progression management
 
 ## Technology Stack
 
@@ -26,7 +30,7 @@ This project is a social drawing experiment built as a full-stack web applicatio
 | Backend | Node.js 20, Express 4.21.2 |
 | Real-time | Socket.IO 4.8.1 |
 | Authentication | express-session 1.18.1, bcryptjs 2.4.3, connect-pg-simple 10.0.0 |
-| Database | PostgreSQL 16 |
+| Database | PostgreSQL (Docker official image) |
 | Security and logging | helmet 8.1.0, morgan 1.10.0 |
 | Configuration | dotenv 16.4.5 |
 | Containerization | Docker, Docker Compose |
@@ -61,6 +65,7 @@ This project is a social drawing experiment built as a full-stack web applicatio
    DB_PORT=5432
    PORT=3000
    SESSION_SECRET=change-this-secret
+   ADMIN_PASSWORD=change-this-admin-password
    ```
 
 3. Start the application.
@@ -75,15 +80,29 @@ This project is a social drawing experiment built as a full-stack web applicatio
    http://localhost:3000
    ```
 
+## Deployment
+
+Deployed link:
+(https://web-app-social-experiment.onrender.com/)
+
 ## Verification
 
-The project does not currently include an automated test suite. For manual verification, run the application and confirm the following:
+The project includes an automated Mocha/Chai test suite in `ProjectSourceCode/test/server.spec.js`.
+
+Run:
+
+```bash
+cd ProjectSourceCode
+npm test
+```
+
+For additional manual verification, run the application and confirm the following:
 
 - Two browser sessions can register and log in successfully
 - Real-time pixel updates appear in both sessions
 - Anonymous users cannot paint or erase
-- Palette updates are persisted per user
-- The 51st paint action in a day is rejected
+- Palette selection and unlock state are persisted per user
+- Daily paint limit responses from `/api/me/limits` change based on user level
 
 ## Runtime Scripts
 
@@ -92,6 +111,7 @@ The application scripts defined in `ProjectSourceCode/package.json` are:
 - `npm start` to run the production server
 - `npm run dev` to run the server with nodemon
 - `npm run init-db` to initialize the database schema
+- `npm test` to run automated tests
 
 ## Contributors
 

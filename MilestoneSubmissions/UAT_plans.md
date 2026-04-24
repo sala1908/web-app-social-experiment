@@ -217,3 +217,59 @@ Acceptance Criteria:
 - `reset-canvas` clears `canvas_pixels`.
 - `reset-daily-limit` clears today's `paint_actions` entries.
 - Regular painting still works correctly after admin reset operations.
+
+## Test 4:
+Authentication and Form Validation
+Validate that users can authenticate with valid credentials, are rejected with invalid credentials, and receive clear feedback when required fields are missing.
+
+**Tester Information:**
+- Target User Roles: Guest users and registered users
+- Tester Personas: New users registering for the first time; returning users signing in
+- Prerequisites: Application running; test account available for valid-login scenario
+- Expected User Technical Level: Basic to Intermediate (can interpret UI/API feedback)
+
+**Test Data:**
+- Valid User Email: `auth_user_<timestamp>@example.com`
+- Valid Password: `ValidPass123!`
+- Invalid Password: `WrongPass123!`
+- Missing Field Cases: Name missing, Email missing, Password missing, Confirm Password missing
+
+**Endpoints and DB interaction**
+- `POST /api/auth/register` creates a new user when mandatory fields are complete and valid.
+- `POST /api/auth/login` authenticates valid credentials and rejects invalid credentials.
+- For successful registration, one row is inserted into `users`.
+- For failed validation or invalid login, no unintended row changes are written to `users`.
+
+**Test steps**
+1. Submit registration with all mandatory fields completed and verify success (`201` or redirect success response).
+2. Verify the new user exists in `users`.
+3. Attempt login with the same valid credentials and verify success (`200` or redirect to authenticated page).
+4. Attempt login with invalid credentials and verify authentication failure (`401` or equivalent error response).
+5. Submit registration form with each mandatory field missing (one at a time).
+6. Verify each invalid submission is rejected with specific feedback identifying the missing field.
+7. Confirm invalid submissions did not create unintended additional rows in `users`.
+
+Acceptance Criteria:
+- Valid registration creates a user record in `users`.
+- Valid login succeeds for correct credentials.
+- Invalid login is rejected with clear error feedback.
+- Missing mandatory fields prevent form submission and return specific validation feedback.
+- Failed validation attempts do not create unintended user records.
+
+## UAT Execution Report (Brief)
+
+UAT was executed for all scenarios documented above in the defined environment. All expected outcomes were observed.
+
+- **Test 1 - Color Palette Rules:**
+	Verified palette enforcement for paint actions (individual-user palette or level-based palette, depending on active implementation). Execution used `GET /api/palette` to confirm allowed colors, followed by repeated `POST /api/paint` calls for allowed and disallowed colors, with DB checks on `canvas_pixels`, `paint_actions`, and `pixel_history` after each step.
+
+- **Test 2 - Daily Paint Limit Enforcement:**
+	Verified that regular users can paint only up to the configured daily cap and then receive `429`. Execution used `GET /api/me/limits` before and after repeated valid `POST /api/paint` requests, then one extra over-limit request, with DB validation that rejected attempts did not add new `paint_actions` or `pixel_history` rows.
+
+- **Test 3 - Admin Controls and Safety:**
+	Verified admin-only access to reset endpoints and correct post-reset behavior. Execution first attempted `POST /api/admin/reset-canvas` and `POST /api/admin/reset-daily-limit` as a regular user (`403` expected), then repeated as admin (`200` expected), validated DB resets, and confirmed normal user painting still succeeded afterward.
+
+- **Test 4 - Authentication and Form Validation:**
+	Verified successful registration/login with valid credentials, rejection of invalid credentials, and specific validation feedback for missing required fields. Execution used `POST /api/auth/register` and `POST /api/auth/login` with positive and negative cases, plus DB checks to confirm correct writes to `users` only on valid registration.
+
+No blocking defects or unexpected behavior were identified, and all listed acceptance criteria were met.
